@@ -3,6 +3,8 @@
 
 ## Unreleased
 
+* Explainer diagram (`docs/how-it-works.svg`) in the README and the GUI, including the optional Syncthing add-on.
+
 * Scheduled runs: every 10 minutes by default with new `--if-changed`: one cheap API call, and a full pass only when the RA list or settings changed (or after `full_run_hours`, default 24).
 
 * Official RA Fix/Improvement versions (e.g. Pokémon Emerald's RNG fix) are now built and preferred by default (`build_variants`); a library ROM whose hash RA registers as a fix counts as the QoL version.

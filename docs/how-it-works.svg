@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" role="img" aria-labelledby="t d" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <title id="t">How ra-wtp-sync works</title>
+  <desc id="d">You add a game to your Want to Play list on RetroAchievements. Every 10 minutes ra-wtp-sync checks the list, finds the matching ROM in your own library and copies it to an output folder. Optionally, Syncthing carries that folder to your handheld and other computers.</desc>
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="900" height="470" rx="14" fill="#f8fafc"/>
+
+  <!-- main flow -->
+  <g stroke="#94a3b8" stroke-width="2">
+    <rect x="20"  y="40" width="230" height="110" rx="12" fill="#ffffff"/>
+    <rect x="335" y="40" width="230" height="110" rx="12" fill="#e0ecff" stroke="#2f6fed"/>
+    <rect x="650" y="40" width="230" height="110" rx="12" fill="#ffffff"/>
+    <rect x="335" y="215" width="230" height="70" rx="12" fill="#ffffff"/>
+  </g>
+  <g stroke="#475569" stroke-width="3" fill="none" marker-end="url(#ar)">
+    <path d="M252 95H331"/><path d="M567 95H646"/><path d="M450 213V154"/>
+  </g>
+  <g fill="#0f172a" text-anchor="middle">
+    <text x="135" y="82" font-size="17" font-weight="700">RetroAchievements</text>
+    <text x="135" y="106" font-size="15">You add a game to your</text>
+    <text x="135" y="126" font-size="15">"Want to Play" list</text>
+
+    <text x="450" y="76" font-size="17" font-weight="700">ra-wtp-sync</text>
+    <text x="450" y="100" font-size="15">looks at your list</text>
+    <text x="450" y="120" font-size="15">every 10 minutes and picks</text>
+    <text x="450" y="140" font-size="15">the right ROM</text>
+
+    <text x="765" y="76" font-size="17" font-weight="700">Output folder</text>
+    <text x="765" y="100" font-size="15">Only the games you want</text>
+    <text x="765" y="120" font-size="15">to play. Removed again</text>
+    <text x="765" y="140" font-size="15">when you drop a game</text>
+
+    <text x="450" y="244" font-size="17" font-weight="700">Your ROM library</text>
+    <text x="450" y="268" font-size="15">only read, never changed</text>
+  </g>
+  <!-- step badges -->
+  <g fill="#2f6fed"><circle cx="20" cy="40" r="15"/><circle cx="335" cy="40" r="15"/><circle cx="650" cy="40" r="15"/></g>
+  <g fill="#fff" font-size="16" font-weight="700" text-anchor="middle"><text x="20" y="46">1</text><text x="335" y="46">2</text><text x="650" y="46">3</text></g>
+
+  <!-- optional add-on -->
+  <rect x="20" y="320" width="860" height="130" rx="12" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="38" y="346" font-size="15" font-weight="700" fill="#475569">OPTIONAL ADD-ON: Syncthing</text>
+  <g stroke="#94a3b8" stroke-width="2">
+    <rect x="650" y="360" width="230" height="80" rx="12" fill="#ffffff"/>
+    <rect x="335" y="360" width="230" height="80" rx="12" fill="#e7f7ec" stroke="#16a34a"/>
+    <rect x="20" y="360" width="230" height="80" rx="12" fill="#ffffff"/>
+  </g>
+  <g stroke="#475569" stroke-width="3" fill="none" marker-end="url(#ar)">
+    <path d="M765 153V356" stroke-dasharray="3 6"/>
+    <path d="M646 400H569"/><path d="M331 400H254"/>
+  </g>
+  <g fill="#0f172a" text-anchor="middle">
+    <text x="765" y="394" font-size="17" font-weight="700">Same output folder</text>
+    <text x="765" y="418" font-size="15">shared with Syncthing</text>
+    <text x="450" y="394" font-size="17" font-weight="700">Syncthing</text>
+    <text x="450" y="418" font-size="15">copies it to your devices</text>
+    <text x="135" y="394" font-size="17" font-weight="700">Handheld, phone, PC</text>
+    <text x="135" y="418" font-size="15">always has your games</text>
+  </g>
+  <g fill="#16a34a"><circle cx="650" cy="360" r="15"/><circle cx="335" cy="360" r="15"/><circle cx="20" cy="360" r="15"/></g>
+  <g fill="#fff" font-size="16" font-weight="700" text-anchor="middle"><text x="650" y="366">4</text><text x="335" y="366">5</text><text x="20" y="366">6</text></g>
+</svg>
