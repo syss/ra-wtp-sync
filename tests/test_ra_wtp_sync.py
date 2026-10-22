@@ -236,6 +236,32 @@ class N64Bases(unittest.TestCase):
             self.assertEqual(ext, ".z64")
             self.assertEqual(why, "")
 
+    def test_second_patch_version_is_tried(self):
+        """Regression: an older patch version that applies but does not match must not use up the budget."""
+        import zlib
+        base = os.urandom(4096)
+        def bps(word):
+            target = base[:100] + word + base[100 + len(word):]
+            body = b"BPS1" + _vi(len(base)) + _vi(len(target)) + _vi(0)
+            body += _vi(((100 - 1) << 2) | 0) + _vi(((len(word) - 1) << 2) | 1) + word
+            body += _vi(((len(target) - 100 - len(word) - 1) << 2) | 0)
+            body += zlib.crc32(base).to_bytes(4, "little") + zlib.crc32(target).to_bytes(4, "little")
+            return body + zlib.crc32(body).to_bytes(4, "little"), target
+        old, _ = bps(b"OLDVER")
+        new, want = bps(b"NEWVER")
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d, "cache"); cache.mkdir()
+            with zipfile.ZipFile(cache / "3-multi.zip", "w") as z:
+                z.writestr("a v1.0.1.bps", old)
+                z.writestr("b v1.0.2.bps", new)
+            libs = []
+            for i in range(80):                     # many decoys, more than max_tries
+                p = Path(d, f"decoy{i}.gb"); p.write_bytes(os.urandom(4096)); libs.append(str(p))
+            real = Path(d, "base.gb"); real.write_bytes(base); libs.append(str(real))
+            ents = [{"PatchUrl": m.PATCH_HOST + "GB/Hacks/3-multi.zip", "MD5": "x"}]
+            data, _, _, why = m.build_patched(ents, {hashlib.md5(want).hexdigest()}, "plain", libs, 10**7, cache)
+            self.assertEqual(data, want, why)
+
     def test_reason_when_base_missing(self):
         with tempfile.TemporaryDirectory() as d:
             cache = Path(d, "cache"); cache.mkdir()

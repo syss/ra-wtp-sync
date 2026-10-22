@@ -836,10 +836,12 @@ def build_patched(entries: list[dict], wanted_md5: set[str], style: str, paths: 
             reasons.append(f"patch format not supported (no ips/bps/ups in {pname_url})")
             continue
         hint = urllib.parse.unquote(url).split("/RAPatches/")[-1].rsplit("/", 1)[0].replace("/", " ")
-        tries = 0
         for pname, pbytes in patches:
             fn = APPLY[os.path.splitext(pname)[1].lower()]
+            tries, verified_base = 0, False
             for cand in base_candidates(paths, hint):
+                if verified_base or tries > max_tries:
+                    break
                 for bname, blob in rom_blobs(cand, max_bytes):
                     tries += 1
                     if tries > max_tries:
@@ -859,8 +861,10 @@ def build_patched(entries: list[dict], wanted_md5: set[str], style: str, paths: 
                         if md5s(res, style) & wanted_md5:
                             ext = ".z64" if style == "n64" else (os.path.splitext(bname)[1] or ".bin")
                             return res, ext, cand, ""
-                if tries > max_tries:
-                    break
+                        # BPS/UPS check the base's CRC, so a patch that applied has the right base:
+                        # this patch is simply a different version than the one RA registered.
+                        if fn is not apply_ips:
+                            verified_base = True
         need = readme_hint(zdata)
         reasons.append("base ROM missing in the library" + (f" - patch needs: {need}" if need else
                        f" - patch needs: {e.get('Name') or pname_url}"))
