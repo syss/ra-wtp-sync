@@ -40,7 +40,7 @@ import ra_wtp_sync as core
 HERE = Path(__file__).resolve().parent
 LANGS = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ja": "Japanese"}
 REGIONS = {"europe": "Europe", "usa": "USA", "japan": "Japan", "world": "World"}
-SIMPLE_KEYS = ("username", "api_key_file", "src", "dest", "state_dir", "saves", "consoles", "exclude_consoles",
+SIMPLE_KEYS = ("username", "api_key_file", "src", "dest", "dest_mode", "state_dir", "saves", "consoles", "exclude_consoles",
                "include_started", "build_patches", "max_rom_mb", "hash_cache_days", "min_list_fraction",
                "patched_dir", "report_file", "build_variants", "sources_file")
 
@@ -293,6 +293,7 @@ button.p{background:var(--acc);border-color:var(--acc);color:#fff}button:disable
 pre{background:#0d1117;color:#d1d5db;padding:12px;border-radius:8px;max-height:340px;overflow:auto;white-space:pre-wrap;font-size:12.5px}
 .sticky{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 0;margin-top:20px;display:flex;gap:8px;flex-wrap:wrap}
 .ok{color:#16a34a}.bad{color:#dc2626}
+.opt{display:flex;gap:8px;align-items:flex-start;margin:6px 0;cursor:pointer}.opt input{margin-top:4px}
 .pick{display:flex;gap:8px}.pick input{flex:1}
 dialog{border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);width:min(560px,92vw)}
 .dl{max-height:320px;overflow:auto;margin:8px 0}.dl div{padding:5px 8px;cursor:pointer;border-radius:5px}.dl div:hover{background:var(--acc2)}
@@ -323,7 +324,10 @@ details.card summary{cursor:pointer}pre#schedcmd{max-height:220px}
 
 <h2>2. Folders</h2><div class="card">
 <label class="f">Your ROM library <span class="hint">(read only, never modified)</span></label><div class="pick"><input type="text" id="src" placeholder="/path/to/roms"><button onclick="browse('src')">Browse…</button></div>
-<label class="f">Output folder <span class="hint">(the games from your list are copied here; only this tool's own files are ever deleted)</span></label><div class="pick"><input type="text" id="dest" placeholder="/path/to/roms-wtp"><button onclick="browse('dest')">Browse…</button></div>
+<label class="f">Where should the games from your list go?</label>
+<label class="opt"><input type="radio" name="mode" value="new" checked> <span><b>A new, separate folder</b> (recommended) <span class="hint">- the tool owns it: one sub-folder per system, and it may delete its own copies when a game leaves your list</span></span></label>
+<label class="opt"><input type="radio" name="mode" value="merge"> <span><b>Straight into my existing ROM folder</b> <span class="hint">- e.g. your frontend's or handheld's ROM folder. Existing system folders (even spelled differently, like <i>Game Boy</i>) are reused; files you already have are never overwritten, and only files this tool added are ever removed</span></span></label>
+<div class="pick"><input type="text" id="dest" placeholder="/path/to/roms-wtp"><button onclick="browse('dest')">Browse…</button></div>
 </div>
 
 <h2>3. Systems</h2><div class="card">
@@ -383,7 +387,7 @@ function ordered(set,pref){return [...pref.filter(x=>set.has(x)),...[...set].fil
 function form(){const L=[...$("langs").querySelectorAll("input")].map((e,i)=>e.checked&&Object.keys(S.languages)[i]).filter(Boolean);
  const R=[...$("regions").querySelectorAll("input")].map((e,i)=>e.checked&&Object.keys(S.regions)[i]).filter(Boolean);
  const all=S.consoles.map(x=>x.key);const allSel=all.every(k=>sel_.has(k));
- return {api_key:$("apikey").value,config:{username:$("username").value.trim(),src:$("src").value.trim(),dest:$("dest").value.trim(),
+ return {api_key:$("apikey").value,config:{username:$("username").value.trim(),src:$("src").value.trim(),dest:$("dest").value.trim(),dest_mode:document.querySelector('input[name=mode]:checked').value,
   saves:$("saves").value.split("\n").map(s=>s.trim()).filter(Boolean),consoles:allSel?["all"]:all.filter(k=>sel_.has(k)),exclude_consoles:[],
   build_patches:$("build").checked,build_variants:$("variants").checked?["Fix","Improvement"]:[],include_started:$("started").checked,preferences:{languages:L,regions:R}}}}
 async function save(quiet){const f=form();if(!f.config.username||!f.config.src||!f.config.dest){$("msg").textContent="username, library and output folder are required";throw 0}
@@ -405,7 +409,7 @@ async function testLogin(){const m=$("loginmsg");m.className="hint";m.textConten
  m.className=r.ok?"ok":"bad";m.textContent=r.message}
 async function report(){$("log").textContent=await (await api("/api/report")).text()}
 async function load(first){S=await (await api("/api/state")).json();const c=S.config;$("cfgpath").textContent=S.config_path;
- $("username").value=c.username;$("src").value=c.src;$("dest").value=c.dest;$("saves").value=c.saves.join("\n");
+ $("username").value=c.username;$("src").value=c.src;$("dest").value=c.dest;document.querySelector(`input[name=mode][value=${c.dest_mode==="merge"?"merge":"new"}]`).checked=true;$("saves").value=c.saves.join("\n");
  $("build").checked=c.build_patches;$("variants").checked=(c.build_variants||[]).length>0;$("started").checked=c.include_started;$("keystate").innerHTML=S.has_key?'<span class=ok>– saved ✓</span>':'<span>– not set</span>';
  const keys=S.consoles.map(x=>x.key);const want=c.consoles.map(String);
  sel_=new Set(want.includes("all")?keys:keys.filter(k=>want.includes(k)||want.includes(String(S.consoles.find(x=>x.key==k).id))));

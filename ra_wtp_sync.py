@@ -150,6 +150,7 @@ DEFAULTS = {
     "api_key_file": str(CONFIG_DIR / "api_key"),
     "src": "",
     "dest": "",
+    "dest_mode": "new",      # "new": folder owned by this tool; "merge": add into an existing ROM folder
     "state_dir": str(STATE_DIR),
     "saves": [],
     "include_started": False,
@@ -270,6 +271,10 @@ def load_config(args) -> dict:
         cfg["exclude_consoles"] = [c.strip() for c in args.exclude.split(",") if c.strip()]
     if args.no_patches:
         cfg["build_patches"] = False
+    if args.merge:
+        cfg["dest_mode"] = "merge"
+    if cfg["dest_mode"] not in ("new", "merge"):
+        sys.exit("dest_mode must be \"new\" or \"merge\"")
     return cfg
 
 
@@ -980,14 +985,24 @@ def catalog_lookup(items: list[dict], title: str, rom_names: list[str]) -> dict 
 
 
 # --------------------------------------------------------------------------- file ops
-def safe_remove(dest: Path, rel: str) -> None:
+def dest_folder(dest: Path, key: str, dirs: list[str], merge: bool) -> str:
+    """Sub-folder of `dest` for one system. In merge mode an existing folder is reused whatever its
+    spelling (GBA, Game Boy Advance, gba ...), so games land where the user's frontend looks."""
+    if merge and dest.is_dir():
+        found = find_dirs(dest, dirs)
+        if found:
+            return found[0].name
+    return key
+
+
+def safe_remove(dest: Path, rel: str, prune: bool = True) -> None:
     p = Path(os.path.realpath(dest / rel))
     if dest not in p.parents:
         return
     if p.exists():
         p.unlink()
     try:
-        if p.parent != dest and not any(p.parent.iterdir()):
+        if prune and p.parent != dest and not any(p.parent.iterdir()):
             p.parent.rmdir()
     except OSError:
         pass
@@ -1057,6 +1072,16 @@ def write_report(path: Path, user: str, missing: list[dict], matched: int, sourc
 
 # --------------------------------------------------------------------------- main
 def sync(cfg: dict, dry_run: bool) -> int:
+    """Run one sync; the lock file and the hash cache are closed again however it ends."""
+    cleanup: list = []
+    try:
+        return _sync(cfg, dry_run, cleanup)
+    finally:
+        for close in reversed(cleanup):
+            close()
+
+
+def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
     if not cfg["username"]:
         sys.exit("no RetroAchievements username (config 'username', --username or $RA_USER)")
     if not cfg["src"] or not cfg["dest"]:
@@ -1066,13 +1091,16 @@ def sync(cfg: dict, dry_run: bool) -> int:
         sys.exit(f"no API key: set $RA_API_KEY or put it in {cfg['api_key_file']}")
 
     src, dest = Path(cfg["src"]).expanduser().resolve(), Path(cfg["dest"]).expanduser().resolve()
-    if dest == src or src in dest.parents or dest in src.parents:
+    merge = cfg["dest_mode"] == "merge"
+    # merge mode may add into a folder that contains the library, but never into the library itself
+    if dest == src or dest in src.parents and not merge or src in dest.parents:
         sys.exit("'src' and 'dest' must be separate folders (src is never written to)")
     if not src.is_dir():
         sys.exit(f"src is not a directory: {src}")
     state = Path(cfg["state_dir"]).expanduser()
     state.mkdir(parents=True, exist_ok=True)
     lock = FileLock(state / "lock")
+    cleanup.append(lock.release)
     if not lock.acquire():
         sys.exit("another run is in progress")
 
@@ -1093,6 +1121,7 @@ def sync(cfg: dict, dry_run: bool) -> int:
     if cfg["saves"]:
         log(f"{len(saved)} save files found for ROM preference")
     db = open_db(state)
+    cleanup.append(db.close)
     patched_dir = Path(cfg["patched_dir"] or state / "patched").expanduser()
     fail_path = state / "patch-failed.json"
     failed: dict = json.loads(fail_path.read_text(encoding="utf-8")) if fail_path.exists() else {}
@@ -1196,22 +1225,28 @@ def sync(cfg: dict, dry_run: bool) -> int:
         plan[str(gid)] = (title, name, min(cands, key=lambda p: rank(p, saved, cfg["preferences"])))
 
     for gid, (title, name, p) in plan.items():
-        rel = f"{name}/{os.path.basename(p)}"
+        rel = f"{dest_folder(dest, name, table[name]['dirs'], merge)}/{os.path.basename(p)}"
         tgt = dest / rel
         old = manifest.get(gid)
-        if old and old["file"] == rel and tgt.exists() and tgt.stat().st_size == os.path.getsize(p):
+        ours = bool(old) and old["file"] == rel
+        if ours and tgt.exists() and tgt.stat().st_size == os.path.getsize(p):
+            continue
+        if merge and (src in tgt.resolve().parents or (tgt.exists() and not ours)):
+            # never write into the library, never overwrite a file this tool did not copy;
+            # untracked, so it is also never deleted
+            log("KEEP", rel, "- already there" if tgt.exists() else "- inside the library")
             continue
         log("ADD", rel)
         if not dry_run:
             copy_atomic(p, tgt)
             if old and old["file"] != rel:
-                safe_remove(dest, old["file"])
+                safe_remove(dest, old["file"], prune=not merge)
         manifest[gid] = {"title": title, "file": rel}
 
     for gid in [g for g in manifest if g not in plan and int(g) not in wanted]:
         log("DEL", manifest[gid]["file"], "-", manifest[gid]["title"])
         if not dry_run:
-            safe_remove(dest, manifest[gid]["file"])
+            safe_remove(dest, manifest[gid]["file"], prune=not merge)
         manifest.pop(gid)
 
     report = Path(cfg["report_file"] or state / "missing-roms.txt").expanduser()
@@ -1252,6 +1287,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--api-key-file", dest="api_key_file", help="file holding the RA Web API key (or set $RA_API_KEY)")
     ap.add_argument("--src", help="ROM library (read-only)")
     ap.add_argument("--dest", help="output folder (the folder your sync tool shares)")
+    ap.add_argument("--merge", action="store_true",
+                    help="--dest is your existing ROM folder: reuse its system folders, never overwrite or delete other files")
     ap.add_argument("--state-dir", dest="state_dir", help="cache + manifest location")
     ap.add_argument("--saves", nargs="*", help="save folders; a ROM that already has a save here is preferred")
     ap.add_argument("--consoles", help="comma separated console keys/ids, or \"all\" (see --list-consoles)")

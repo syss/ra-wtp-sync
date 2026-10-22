@@ -96,7 +96,12 @@ def main() -> int:
     src = ask("ROM library to read from (never modified)", str(Path.home() / "roms"))
     if not Path(src).expanduser().is_dir():
         print(f"  (note: {src} does not exist yet)")
-    dest = ask("Output folder (the sync target; add-ons such as Syncthing can share it later)", str(Path.home() / "roms-wtp"))
+    print("Where should the games from your list go?")
+    print("  1) a new, separate folder (recommended; the tool owns it)")
+    print("  2) straight into my existing ROM folder (existing system folders are reused, nothing of yours is overwritten or deleted)")
+    merge = ask("Choose 1 or 2", "1") == "2"
+    dest = ask("Existing ROM folder" if merge else "Output folder (the sync target; add-ons such as Syncthing can share it later)",
+               "" if merge else str(Path.home() / "roms-wtp"))
     saves = ask("RetroArch saves folder, to prefer ROMs that already have a save (empty = none)", default_saves())
 
     print("\n== Choices ==")
@@ -115,6 +120,7 @@ username = {toml_str(user)}
 api_key_file = "api_key"
 src = {toml_str(src)}
 dest = {toml_str(dest)}
+dest_mode = {toml_str("merge" if merge else "new")}
 saves = {toml_list([saves] if saves else [])}
 consoles = {toml_list(consoles)}
 include_started = {str(started).lower()}

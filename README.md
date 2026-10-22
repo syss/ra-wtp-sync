@@ -83,6 +83,16 @@ your user.
 The first run hashes your library (cached afterwards, keyed by size and mtime), so it can take a
 few minutes for a big collection; later runs only look at new files.
 
+### New folder or your existing ROM folder
+
+* **New folder** (default, recommended): `dest` is owned by the tool, one sub-folder per system.
+* **Merge** (`dest_mode = "merge"`, `--merge`, or the second option in the GUI / `setup.py`): `dest` is your
+  *existing* ROM folder, for example your frontend's or a handheld's SD card. A system folder that already
+  exists is reused whatever its spelling (`GBA`, `Game Boy Advance`, `gba` ...), otherwise one is created.
+  A file that is already there is never overwritten (it is left alone and never deleted), and only files this
+  tool added itself are removed when a game leaves your list; folders are never removed. The library
+  (`src`) may live inside that folder, but must not be the same folder. Try it with `--dry-run` first.
+
 ### Where things live
 
 | | Linux | Windows | macOS |
