@@ -154,9 +154,11 @@ patch is published. Built ROMs are verified against RA's hash before they are us
 ## Limitations
 
 * Only ROMs that exist in your library can be copied. Hacks and homebrew need the patched ROM, or
-  the base ROM plus an official RA patch in IPS, BPS or UPS format; other patch formats are
+  the base ROM plus an official RA patch in IPS, BPS or UPS format (also inside .7z); other patch formats (xdelta, ppf) are
   reported as unsupported.
-* Compressed formats other than `.zip` (e.g. `.7z`) are not inspected.
+* `.zip` is handled natively; `.7z` archives (ROMs in your library and RA patches) need an extractor:
+  `pip install py7zr`, or 7-Zip / bsdtar on the PATH (macOS and Windows ship `tar`=bsdtar; most Linux
+  distributions have `7z`). Other archive types (rar, ...) are not inspected.
 * Language/region/QoL detection is based on file-name conventions (No-Intro, GoodTools).
 
 ## Development

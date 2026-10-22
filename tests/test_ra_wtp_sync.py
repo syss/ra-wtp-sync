@@ -192,6 +192,11 @@ class TitleMatching(unittest.TestCase):
 
 
 class Hashing2(unittest.TestCase):
+    def test_only_first_64_mib_are_hashed(self):
+        big = os.urandom(1024) * (65 * 1024)          # 65 MiB
+        self.assertIn(hashlib.md5(big[:64 * 1024 * 1024]).hexdigest(), m.md5s(big, "n64"))
+
+
     def test_lynx_and_7800_headers(self):
         body = b"z" * 2048
         self.assertIn(hashlib.md5(body).hexdigest(), m.md5s(b"LYNX" + b"\0" * 60 + body, "lynx"))
@@ -207,6 +212,68 @@ class Report(unittest.TestCase):
             self.assertIn("[Nintendo 64] Some Hack", txt)
             self.assertIn("base ROM missing", txt)
             self.assertIn("retroachievements.org/game/42", txt)
+
+
+class N64Bases(unittest.TestCase):
+    def test_patch_applies_to_byteswapped_base(self):
+        import zlib
+        z64 = b"\x80\x37\x12\x40" + os.urandom(4092)
+        v64 = bytearray(z64); v64[0::2], v64[1::2] = z64[1::2], z64[0::2]
+        target = z64[:100] + b"HACKED" + z64[106:]
+        body = b"BPS1" + _vi(len(z64)) + _vi(len(target)) + _vi(0)
+        body += _vi(((100 - 1) << 2) | 0) + _vi(((6 - 1) << 2) | 1) + b"HACKED" + _vi(((len(target) - 106 - 1) << 2) | 0)
+        body += zlib.crc32(z64).to_bytes(4, "little") + zlib.crc32(target).to_bytes(4, "little")
+        patch = body + zlib.crc32(body).to_bytes(4, "little")
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d, "cache"); cache.mkdir()
+            with zipfile.ZipFile(cache / "1-hack.zip", "w") as z:
+                z.writestr("hack.bps", patch)
+            lib = Path(d, "Super Mario 64 (USA).n64"); lib.write_bytes(bytes(v64))   # byte-swapped dump
+            ents = [{"PatchUrl": m.PATCH_HOST + "N64/Hacks/Super%20Mario%2064/1-hack.zip", "MD5": "x"}]
+            want = {hashlib.md5(target).hexdigest()}
+            data, ext, base, why = m.build_patched(ents, want, "n64", [str(lib)], 10**7, cache)
+            self.assertEqual(data, target)
+            self.assertEqual(ext, ".z64")
+            self.assertEqual(why, "")
+
+    def test_reason_when_base_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d, "cache"); cache.mkdir()
+            with zipfile.ZipFile(cache / "2-x.zip", "w") as z:
+                z.writestr("x.ips", b"PATCHEOF")
+                z.writestr("readme.txt", "Use with: Some Game (USA).sfc")
+            ents = [{"PatchUrl": m.PATCH_HOST + "SNES/Hacks/2-x.zip", "MD5": "x"}]
+            data, _, _, why = m.build_patched(ents, {"0" * 32}, "snes", [], 10**7, cache)
+            self.assertIsNone(data)
+            self.assertIn("base ROM missing", why)
+            self.assertIn("Some Game (USA).sfc", why)
+
+
+@unittest.skipUnless(m.archive_tool() or __import__("importlib").util.find_spec("py7zr"), "no 7z extractor installed")
+class SevenZip(unittest.TestCase):
+    def make_7z(self, d, members):
+        import subprocess, shutil
+        src = Path(d, "src"); src.mkdir()
+        for n, b in members.items():
+            (src / n).write_bytes(b)
+        out = Path(d, "a.7z")
+        exe = shutil.which("7z") or shutil.which("7zz") or shutil.which("7za")
+        if exe is None:
+            self.skipTest("no 7z binary to create test archive")
+        subprocess.run([exe, "a", "-bso0", "-bsp0", str(out)] + [str(src / n) for n in members], check=True)
+        return out
+
+    def test_rom_inside_7z_is_hashed(self):
+        with tempfile.TemporaryDirectory() as d:
+            rom = os.urandom(5000)
+            p = self.make_7z(d, {"game.gb": rom})
+            self.assertIn(hashlib.md5(rom).hexdigest(), m.file_hashes(str(p), "plain", 10**7))
+
+    def test_patch_inside_7z(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self.make_7z(d, {"x.ips": b"PATCHEOF", "readme.txt": b"hi"})
+            found = m.patches_in_zip(p.read_bytes())
+            self.assertEqual([n for n, _ in found], ["x.ips"])
 
 
 class Portability(unittest.TestCase):

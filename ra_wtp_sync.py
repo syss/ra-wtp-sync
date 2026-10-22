@@ -39,7 +39,9 @@ import re
 import shutil
 import sqlite3
 import ssl
+import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import unicodedata
@@ -362,39 +364,130 @@ def fetch_games(key, user, include_started) -> dict[int, tuple[str, int]]:
 
 
 # --------------------------------------------------------------------------- hashing
+def n64_to_z64(data: bytes) -> bytes:
+    """N64 dumps come in three byte orders; RA hashes (and patches expect) big-endian .z64."""
+    head = data[:4]
+    if head == b"\x37\x80\x40\x12":        # .v64: byte-swapped pairs
+        a = bytearray(data)
+        a[0::2], a[1::2] = data[1::2], data[0::2]
+        return bytes(a)
+    if head == b"\x40\x12\x37\x80":        # .n64: little-endian words
+        a = bytearray(data)
+        a[0::4], a[1::4], a[2::4], a[3::4] = data[3::4], data[2::4], data[1::4], data[0::4]
+        return bytes(a)
+    return data
+
+
+HASH_LIMIT = 64 * 1024 * 1024   # RetroAchievements hashes at most the first 64 MiB of a ROM
+
+
+def _md5(data: bytes) -> str:
+    return hashlib.md5(data[:HASH_LIMIT]).hexdigest()
+
+
 def md5s(data: bytes, style: str) -> set[str]:
     """MD5s RetroAchievements could have registered for this ROM image."""
-    out = {hashlib.md5(data).hexdigest()}
+    out = {_md5(data)}
     if style in ("nes", "fds") and data[:4] in (b"NES\x1a", b"FDS\x1a"):
-        out.add(hashlib.md5(data[16:]).hexdigest())
+        out.add(_md5(data[16:]))
     elif style == "lynx" and data[:4] == b"LYNX":
-        out.add(hashlib.md5(data[64:]).hexdigest())
+        out.add(_md5(data[64:]))
     elif style == "a7800" and data[1:10] == b"ATARI7800":
-        out.add(hashlib.md5(data[128:]).hexdigest())
+        out.add(_md5(data[128:]))
     elif style == "snes" and len(data) % 1024 == 512:
-        out.add(hashlib.md5(data[512:]).hexdigest())
+        out.add(_md5(data[512:]))
     elif style == "n64":
-        head = data[:4]
-        if head == b"\x37\x80\x40\x12":        # .v64 byte-swapped pairs
-            a = bytearray(data)
-            a[0::2], a[1::2] = data[1::2], data[0::2]
-            out.add(hashlib.md5(a).hexdigest())
-        elif head == b"\x40\x12\x37\x80":      # .n64 little-endian words
-            a = bytearray(data)
-            a[0::4], a[1::4], a[2::4], a[3::4] = data[3::4], data[2::4], data[1::4], data[0::4]
-            out.add(hashlib.md5(a).hexdigest())
+        out.add(_md5(n64_to_z64(data)))
     return out
+
+
+# --------------------------------------------------------------------------- archives
+SEVENZ_MAGIC = b"7z\xbc\xaf\x27\x1c"
+_tool_cache: list = []
+
+
+def archive_tool() -> list[str] | None:
+    """Command prefix for a 7z-capable extractor: 7-Zip, or bsdtar (macOS/Windows `tar`)."""
+    if _tool_cache:
+        return _tool_cache[0]
+    found = None
+    for exe in ("7zz", "7z", "7za", "7zr"):
+        if shutil.which(exe):
+            found = [shutil.which(exe), "x", "-y", "-bso0", "-bsp0"]
+            break
+    if not found:
+        for exe in ("bsdtar", "tar"):
+            path = shutil.which(exe)
+            if path:
+                try:
+                    out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10).stdout
+                except (OSError, subprocess.SubprocessError):
+                    continue
+                if "bsdtar" in out or "libarchive" in out:
+                    found = [path, "-x"]
+                    break
+    _tool_cache.append(found)
+    return found
+
+
+def extract_7z(path: str, max_bytes: int):
+    """Yield (member name, bytes) from a .7z file using py7zr, 7-Zip or bsdtar."""
+    try:
+        import py7zr  # optional: pip install py7zr
+        with py7zr.SevenZipFile(path) as z:
+            for name, bio in z.readall().items():
+                data = bio.read()
+                if 0 < len(data) < max_bytes:
+                    yield name, data
+        return
+    except ImportError:
+        pass
+    except Exception as e:
+        log("  7z read failed", path, f"({e})")
+        return
+    tool = archive_tool()
+    if not tool:
+        if not getattr(extract_7z, "warned", False):
+            log("  .7z archive found but no extractor: install 7-Zip / bsdtar or `pip install py7zr`")
+            extract_7z.warned = True
+        return
+    with tempfile.TemporaryDirectory(prefix="ra-wtp-") as tmp:
+        cmd = tool + ([f"-o{tmp}", path] if tool[1] == "x" else ["-f", path, "-C", tmp])
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=300, check=True)
+        except (OSError, subprocess.SubprocessError) as e:
+            log("  7z extract failed", path, f"({e})")
+            return
+        root = os.path.realpath(tmp)
+        for dp, _, fns in os.walk(tmp):
+            for fn in fns:
+                p = os.path.join(dp, fn)
+                if os.path.islink(p) or not os.path.realpath(p).startswith(root):
+                    continue
+                if 0 < os.path.getsize(p) < max_bytes:
+                    yield os.path.relpath(p, tmp), Path(p).read_bytes()
+
+
+def archive_members(path: str, max_bytes: int):
+    """(name, bytes) of ROM-ish members of a .zip or .7z file."""
+    low = path.lower()
+    if low.endswith(".zip"):
+        with zipfile.ZipFile(path) as z:
+            for i in z.infolist():
+                if not i.is_dir() and not i.filename.lower().endswith(SKIP_EXT) and 1000 < i.file_size < max_bytes:
+                    yield i.filename, z.read(i)
+    elif low.endswith(".7z"):
+        for name, data in extract_7z(path, max_bytes):
+            if not name.lower().endswith(SKIP_EXT) and len(data) > 1000:
+                yield name, data
 
 
 def file_hashes(path: str, style: str, max_bytes: int) -> set[str]:
     res: set[str] = set()
     try:
-        if path.lower().endswith(".zip"):
-            with zipfile.ZipFile(path) as z:
-                for i in z.infolist():
-                    if i.is_dir() or i.filename.lower().endswith(SKIP_EXT) or not 1000 < i.file_size < max_bytes:
-                        continue
-                    res |= md5s(z.read(i), style)
+        if path.lower().endswith((".zip", ".7z")):
+            for _, data in archive_members(path, max_bytes):
+                res |= md5s(data, style)
         elif os.path.getsize(path) < max_bytes:
             with open(path, "rb") as f:
                 res = md5s(f.read(), style)
@@ -615,8 +708,11 @@ def apply_bps(src: bytes, p: bytes) -> bytes:
         else:
             v, i = _varint(p, i)
             trel += -(v >> 1) if v & 1 else v >> 1
-            for k in range(n):  # may overlap, copy byte by byte
-                out[o + k] = out[trel + k]
+            if trel + n <= o:                 # no overlap: one slice copy
+                out[o:o + n] = out[trel:trel + n]
+            else:                             # overlapping run: must copy byte by byte
+                for k in range(n):
+                    out[o + k] = out[trel + k]
             trel += n
         o += n
     return bytes(out)
@@ -669,6 +765,15 @@ def fetch_patch_zip(url: str, cache: Path) -> bytes | None:
 
 
 def patches_in_zip(data: bytes) -> list[tuple[str, bytes]]:
+    """ips/bps/ups files inside a downloaded .zip or .7z patch archive."""
+    if data[:6] == SEVENZ_MAGIC:
+        with tempfile.NamedTemporaryFile(suffix=".7z", delete=False) as f:
+            f.write(data)
+            tmp = f.name
+        try:
+            return [(n, d) for n, d in extract_7z(tmp, MAX_PATCH_BYTES) if n.lower().endswith(PATCH_EXT)]
+        finally:
+            os.unlink(tmp)
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             return [(i.filename, z.read(i)) for i in z.infolist()
@@ -680,11 +785,8 @@ def patches_in_zip(data: bytes) -> list[tuple[str, bytes]]:
 def rom_blobs(path: str, max_bytes: int):
     """Yield (display name, bytes) for the ROM image(s) in a library file."""
     try:
-        if path.lower().endswith(".zip"):
-            with zipfile.ZipFile(path) as z:
-                for i in z.infolist():
-                    if not i.is_dir() and not i.filename.lower().endswith(SKIP_EXT) and 1000 < i.file_size < max_bytes:
-                        yield i.filename, z.read(i)
+        if path.lower().endswith((".zip", ".7z")):
+            yield from archive_members(path, max_bytes)
         elif os.path.getsize(path) < max_bytes:
             yield os.path.basename(path), Path(path).read_bytes()
     except Exception:
@@ -722,7 +824,7 @@ def build_patched(entries: list[dict], wanted_md5: set[str], style: str, paths: 
         if not url:
             continue
         pname_url = urllib.parse.unquote(url.rsplit("/", 1)[-1])
-        if not pname_url.lower().endswith(".zip"):
+        if not pname_url.lower().endswith((".zip", ".7z")):
             reasons.append(f"patch format not supported ({pname_url})")
             continue
         zdata = fetch_patch_zip(url, cache)
@@ -747,13 +849,16 @@ def build_patched(entries: list[dict], wanted_md5: set[str], style: str, paths: 
                         variants.append(blob[512:])   # some patches expect the unheadered ROM
                     if style == "nes" and blob[:4] == b"NES\x1a":
                         variants.append(blob[16:])
+                    if style == "n64":
+                        variants = [n64_to_z64(blob)]   # patches are made against big-endian .z64
                     for v in variants:
                         try:
                             res = fn(v, pbytes)
                         except Exception:
                             continue
                         if md5s(res, style) & wanted_md5:
-                            return res, os.path.splitext(bname)[1] or ".bin", cand, ""
+                            ext = ".z64" if style == "n64" else (os.path.splitext(bname)[1] or ".bin")
+                            return res, ext, cand, ""
                 if tries > max_tries:
                     break
         need = readme_hint(zdata)
