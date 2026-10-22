@@ -6,6 +6,6 @@ Description=Mirror RetroAchievements Want to Play list into the ROM sync folder
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /path/to/ra-wtp-sync/ra_wtp_sync.py
+ExecStart=/usr/bin/python3 /path/to/ra-wtp-sync/ra_wtp_sync.py --if-changed
 Nice=10
 IOSchedulingClass=idle

@@ -505,6 +505,55 @@ class VariantEndToEnd(unittest.TestCase):
             self.assertIn("RA Fix", manifest["1"]["version"])
 
 
+class IfChanged(unittest.TestCase):
+    ROM = b"poll-test-rom" * 100
+
+    def test_unchanged_list_skips_the_full_pass(self):
+        md5 = hashlib.md5(self.ROM).hexdigest()
+        listing = [{"ID": 1, "Title": "Game", "ConsoleID": 4}]
+        calls = {"hashes": 0}
+
+        def fake_api(endpoint, key, **kw):
+            if endpoint == "API_GetUserWantToPlayList.php":
+                return {"Results": listing, "Total": len(listing)}
+            if endpoint == "API_GetGameHashes.php":
+                calls["hashes"] += 1
+                return {"Results": [{"MD5": md5, "Name": "Game.gb"}]}
+            raise RuntimeError(endpoint)
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            (root / "lib" / "gb").mkdir(parents=True)
+            (root / "lib" / "gb" / "Game.gb").write_bytes(self.ROM)
+            cfg = dict(m.DEFAULTS, username="u", src=str(root / "lib"), dest=str(root / "out"),
+                       state_dir=str(root / "state"), consoles=["gb"], build_patches=False)
+            real_index, saved = m.index_console, (m.api, os.environ.get("RA_API_KEY"))
+            scans = []
+            m.api, os.environ["RA_API_KEY"] = fake_api, "x"
+            m.index_console = lambda *a, **k: scans.append(1) or real_index(*a, **k)
+            try:
+                m.sync(cfg, False, if_changed=True)
+                self.assertEqual(len(scans), 1, "first run does the full pass")
+                m.sync(cfg, False, if_changed=True)
+                self.assertEqual(len(scans), 1, "same list: no library scan")
+                listing.append({"ID": 2, "Title": "Other", "ConsoleID": 4})
+                m.sync(cfg, False, if_changed=True)
+                self.assertEqual(len(scans), 2, "changed list: full pass")
+                m.sync(dict(cfg, full_run_hours=0), False, if_changed=True)
+                self.assertEqual(len(scans), 3, "list unchanged but the last full pass is too old: full pass")
+            finally:
+                m.index_console, m.api = real_index, saved[0]
+                os.environ.pop("RA_API_KEY") if saved[1] is None else os.environ.update(RA_API_KEY=saved[1])
+
+    def test_fingerprint_reacts_to_list_and_settings(self):
+        games = {1: ("Game", 4)}
+        base = m.run_fingerprint(dict(m.DEFAULTS), games, ["gb"])
+        self.assertEqual(base, m.run_fingerprint(dict(m.DEFAULTS), dict(games), ["gb"]))
+        self.assertNotEqual(base, m.run_fingerprint(dict(m.DEFAULTS), {**games, 2: ("B", 4)}, ["gb"]))
+        self.assertNotEqual(base, m.run_fingerprint(dict(m.DEFAULTS), games, ["gb", "gba"]))
+        self.assertNotEqual(base, m.run_fingerprint(dict(m.DEFAULTS, dest="/x"), games, ["gb"]))
+
+
 class MergeMode(unittest.TestCase):
     """dest_mode = "merge": add into an existing ROM folder without touching anything else."""
     ROM = b"merge-test-rom" * 100
@@ -599,6 +648,10 @@ class Schedule(unittest.TestCase):
     def test_cron_interval(self):
         import ra_wtp_schedule as sc
         self.assertTrue(sc.cron_line(30).startswith("7,37 "))
+        self.assertTrue(sc.cron_line(10).startswith("*/10 "))
+        self.assertIn("--if-changed", sc.cron_line(10))
+        self.assertIn("--if-changed", sc.manual("win"))
+        self.assertIn("--if-changed", sc.manual("mac"))
         self.assertTrue(sc.cron_line(15).startswith("*/15 "))
 
 

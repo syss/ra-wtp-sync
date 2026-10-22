@@ -245,7 +245,7 @@ def make_handler(st: State, port: int):
             elif self.path == "/api/test":
                 self._send(json.dumps(st.test_login(body)).encode())
             elif self.path == "/api/schedule":
-                minutes = max(5, min(int(body.get("minutes", 30)), 1440))
+                minutes = max(5, min(int(body.get("minutes", 10)), 1440))
                 ok, msg = sched.remove() if body.get("remove") else sched.install(minutes)
                 self._send(json.dumps({"ok": ok, "message": msg, "installed": sched.installed()}).encode())
             else:
@@ -358,9 +358,9 @@ details.card summary{cursor:pointer}pre#schedcmd{max-height:220px}
 <div class="tabs" id="schedtabs"></div>
 <pre id="schedcmd"></pre>
 <div class="bar"><button class="p" id="schedinst" onclick="schedule(false)">Run automatically every</button>
-<input type="number" id="schedmin" value="30" min="5" max="1440" style="width:70px"> <span class="hint">minutes</span>
+<input type="number" id="schedmin" value="10" min="5" max="1440" style="width:70px"> <span class="hint">minutes</span>
 <button onclick="schedule(true)">Remove schedule</button><span class="hint" id="schedmsg"></span></div>
-<p class="hint">Installing works for the system you are on; the other tabs show how to set it up by hand there.</p></div>
+<p class="hint">Every run first asks RetroAchievements for your list (one quick call) and stops if nothing changed, so a short interval costs next to nothing; the full pass over your library runs when the list changes, and at least once a day. Installing works for the system you are on; the other tabs show how to set it up by hand there.</p></div>
 
 <h2>Add-ons <span class="hint">(optional)</span></h2>
 <details class="card"><summary><b>Share the output folder with Syncthing</b></summary>
@@ -423,7 +423,7 @@ function drawSched(){const sc=S.schedule;schedTab=schedTab||sc.current;const t=$
  for(const p of sc.platforms){const b=document.createElement("button");b.textContent=p.label+(p.key==sc.current?" (this system)":"");b.className=p.key==schedTab?"on":"";b.onclick=()=>{schedTab=p.key;drawSched()};t.appendChild(b)}
  $("schedcmd").textContent=sc.platforms.find(p=>p.key==schedTab).manual;
  $("schedinst").disabled=schedTab!=sc.current;$("schedmsg").textContent=sc.installed?"Schedule is installed on this system ✓":""}
-async function schedule(rm){const r=await (await api("/api/schedule",{method:"POST",body:JSON.stringify({remove:rm,minutes:+$("schedmin").value||30})})).json();
+async function schedule(rm){const r=await (await api("/api/schedule",{method:"POST",body:JSON.stringify({remove:rm,minutes:+$("schedmin").value||10})})).json();
  S.schedule.installed=r.installed;drawSched();$("schedmsg").textContent=r.message}
 load(true).then(drawSched);
 </script></body></html>

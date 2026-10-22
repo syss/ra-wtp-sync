@@ -27,6 +27,7 @@ SYNC = HERE / "ra_wtp_sync.py"
 PLATFORMS = ("linux", "win", "mac")
 LABELS = {"linux": "Linux", "win": "Windows", "mac": "macOS"}
 TASK = "ra-wtp-sync"
+FLAG = "--if-changed"   # every scheduled run is a cheap check; the full pass runs when RA changed (or daily)
 
 
 def current() -> str:
@@ -42,19 +43,19 @@ def _win_python() -> str:
     return str(pyw if pyw.exists() else sys.executable)
 
 
-def cron_line(minutes: int = 30) -> str:
+def cron_line(minutes: int = 10) -> str:
     step = max(1, min(minutes, 60))
     spec = "7,37 * * * *" if step == 30 else f"*/{step} * * * *" if step < 60 else "7 * * * *"
-    return f'{spec} nice -n 10 "{sys.executable}" "{SYNC}" >> "{HERE / "cron.log"}" 2>&1'
+    return f'{spec} nice -n 10 "{sys.executable}" "{SYNC}" {FLAG} >> "{HERE / "cron.log"}" 2>&1'
 
 
-def plist_text(minutes: int = 30) -> str:
+def plist_text(minutes: int = 10) -> str:
     log = Path.home() / "Library/Logs/ra-wtp-sync.log"
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>ra-wtp-sync</string>
-<key>ProgramArguments</key><array><string>{sys.executable}</string><string>{SYNC}</string></array>
+<key>ProgramArguments</key><array><string>{sys.executable}</string><string>{SYNC}</string><string>{FLAG}</string></array>
 <key>StartInterval</key><integer>{minutes * 60}</integer>
 <key>RunAtLoad</key><true/>
 <key>Nice</key><integer>10</integer>
@@ -63,22 +64,22 @@ def plist_text(minutes: int = 30) -> str:
 """
 
 
-def manual(plat: str, minutes: int = 30) -> str:
+def manual(plat: str, minutes: int = 10) -> str:
     """The exact command / entry to set up by hand on `plat` (shown in the GUI)."""
     if plat == "linux":
         return f"crontab -e   # add this line:\n{cron_line(minutes)}"
     if plat == "win":
         return (f'schtasks /Create /F /TN {TASK} /SC MINUTE /MO {minutes} '
-                f'/TR "\\"{_win_python()}\\" \\"{SYNC}\\""')
+                f'/TR "\\"{_win_python()}\\" \\"{SYNC}\\" {FLAG}"')
     return f"# save as {plist_path()}, then: launchctl load {plist_path()}\n{plist_text(minutes)}"
 
 
-def install(minutes: int = 30) -> tuple[bool, str]:
+def install(minutes: int = 10) -> tuple[bool, str]:
     """Install the recurring job for the current OS. Returns (ok, message)."""
     plat = current()
     if plat == "win":
         r = subprocess.run(["schtasks", "/Create", "/F", "/TN", TASK, "/SC", "MINUTE", "/MO", str(minutes),
-                            "/TR", f'"{_win_python()}" "{SYNC}"'], capture_output=True, text=True)
+                            "/TR", f'"{_win_python()}" "{SYNC}" {FLAG}'], capture_output=True, text=True)
         return r.returncode == 0, (r.stdout.strip() or r.stderr.strip())
     if plat == "mac":
         p = plist_path()
