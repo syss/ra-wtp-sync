@@ -164,11 +164,6 @@ DEFAULTS = {
     # RA also registers patched versions of games you may own (fixes, improvements, translations...).
     # List the patch categories to build for games already in your library, e.g. ["Fix", "Improvement"].
     "build_variants": [],
-    # Free homebrew from community catalogs (currently Arduboy: Erwin's Arduboy Collection). The catalog
-    # metadata (author page + license) always goes into the report; actually downloading a game is
-    # opt-in, limited to permissive licenses, and verified against RA's hash.
-    "fetch_homebrew": False,
-    "homebrew_dir": "",      # where downloaded homebrew is kept (default: <state_dir>/homebrew)
     "sources_file": "",      # extra JSON with free-download links (default: sources.json next to the script)
     "preferences": {
         # Earlier entries win. Choose from: save, qol, language, region, revision
@@ -179,7 +174,7 @@ DEFAULTS = {
 }
 
 SKIP_EXT = (".json", ".txt", ".nfo", ".xml", ".png", ".jpg", ".srm", ".sav", ".state",
-            ".cfg", ".ips", ".bps", ".ups", ".part", ".tmp")
+            ".cfg", ".ips", ".bps", ".ups", ".part", ".tmp", ".ini", ".url", ".md", ".gif")
 SAVE_EXT = (".srm", ".sav", ".eep", ".dsv", ".fla", ".mpk", ".rtc", ".sra")
 
 # Heuristics on file names (No-Intro / GoodTools / hack conventions).
@@ -908,11 +903,9 @@ def load_sources(cfg: dict) -> dict[str, dict]:
 
 # --------------------------------------------------------------------------- homebrew catalogs
 # console key -> machine readable catalog maintained by the community. repo.json is meant to be used by
-# other tools ("as a source to build your own application"); entries carry author, license and links.
+# other tools ("as a source to build your own application"); it is only read to show author, license and
+# links in the report. Nothing is downloaded from it - import the collection into your library yourself.
 CATALOGS = {"arduboy": "https://arduboy.ried.cl/repo.json"}
-# Downloads are only accepted from the catalog's own GitHub repository.
-CATALOG_DOWNLOAD_PREFIX = "https://raw.githubusercontent.com/eried/ArduboyCollection/"
-MAX_HOMEBREW_BYTES = 16 * 1024 * 1024
 _NONFREE = re.compile(r"proprietary|unspecified|unknown|none|\bnc\b|-nc\b|noncommercial", re.I)
 _FREE = re.compile(r"^(mit|bsd|apache|gpl|lgpl|agpl|mpl|cc0|cc-by|unlicense|isc|zlib|wtfpl|public domain)", re.I)
 
@@ -957,29 +950,6 @@ def catalog_lookup(items: list[dict], title: str, rom_names: list[str]) -> dict 
     wanted = {norm_title(title)} | {norm_title(stem(n)) for n in rom_names if n}
     wanted.discard("")
     return next((i for i in items if norm_title(i.get("title", "")) in wanted), None)
-
-
-def fetch_homebrew_rom(item: dict, ents: list[dict], style: str, out_dir: Path) -> tuple[Path | None, str]:
-    """Download the catalog's hex for `item`; keep it only if it matches a hash RA registered."""
-    wanted = {e["MD5"]: e.get("Name") for e in ents}
-    for b in item.get("binaries") or []:
-        url = b.get("filename") or ""
-        if not url.startswith(CATALOG_DOWNLOAD_PREFIX) or not url.lower().endswith((".hex", ".arduboy")):
-            continue
-        data = http_get(url, MAX_HOMEBREW_BYTES)
-        if not data:
-            continue
-        hit = next((wanted[h] for h in md5s(data, style) if h in wanted), None)
-        if hit is None:
-            return None, "the catalog's version differs from the one RA registered (different hash)"
-        out = out_dir / re.sub(r'[\\/:*?"<>|]+', " -", hit)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(data)
-        (out.parent / (out.name + ".source.txt")).write_text(
-            f"{item.get('title')} by {item.get('author')} - license {item.get('license')}\n"
-            f"{item.get('sourceUrl') or item.get('url')}\nfetched from {url}\n", encoding="utf-8")
-        return out, ""
-    return None, "the catalog lists no downloadable hex for it"
 
 
 # --------------------------------------------------------------------------- file ops
@@ -1101,7 +1071,6 @@ def sync(cfg: dict, dry_run: bool) -> int:
     failed: dict = json.loads(fail_path.read_text(encoding="utf-8")) if fail_path.exists() else {}
     failed = {k: v for k, v in failed.items() if isinstance(v, dict)}   # drop pre-1.0 float entries
     sources = load_sources(cfg)
-    homebrew_dir = Path(cfg["homebrew_dir"] or state / "homebrew").expanduser()
     _catalogs: dict[str, list] = {}
 
     def catalog_items(key_: str) -> list[dict]:
@@ -1138,20 +1107,10 @@ def sync(cfg: dict, dry_run: bool) -> int:
             hs = {e["MD5"] for e in ents}
             if cid not in indexes:
                 log("indexing", name)
-                indexes[cid] = index_console(db, src, spec, max_bytes, [patched_dir / name, homebrew_dir / name])
+                indexes[cid] = index_console(db, src, spec, max_bytes, [patched_dir / name])
             cands = {p for h in hs for p in indexes[cid].get(h, [])}
-            if not cands and name in CATALOGS:
+            if not cands and name in CATALOGS:       # author page + license for the report (read-only)
                 catalog = catalog_lookup(catalog_items(name), title, [e.get("Name") for e in ents])
-                if catalog and cfg["fetch_homebrew"] and is_permissive(catalog.get("license")) and not dry_run:
-                    got, why = fetch_homebrew_rom(catalog, ents, spec["hash"], homebrew_dir / name)
-                    if got:
-                        log(f"  fetched {got.name} ({catalog.get('license')}, by {catalog.get('author')})")
-                        cands = {str(got)}
-                        indexes[cid].setdefault(next(iter(hs & md5s(got.read_bytes(), spec["hash"]))), []).append(str(got))
-                    else:
-                        reason = f"in the {name} catalog, but {why}"
-                elif catalog and cfg["fetch_homebrew"] and not is_permissive(catalog.get("license")):
-                    reason = f"in the {name} catalog under license '{catalog.get('license')}': not downloaded automatically"
             if not cands and cfg["build_patches"] and any(e["PatchUrl"] for e in ents):
                 old = failed.get(str(gid), {})
                 if time.time() - old.get("t", 0) < cfg["hash_cache_days"] * 86400:

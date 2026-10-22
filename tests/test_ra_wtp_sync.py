@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License along with
 # this program. If not, see <https://www.gnu.org/licenses/>.
 
-import hashlib, os, sys, tempfile, unittest, zipfile
+import hashlib, json, os, sys, tempfile, unittest, zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ra_wtp_sync as m
@@ -351,7 +351,6 @@ class SevenZip(unittest.TestCase):
 
 
 class Catalog(unittest.TestCase):
-    HEX = b":100000000C945D000C946E000C946E000C946E00A1\n" * 50
     PREFIX = "https://raw.githubusercontent.com/eried/ArduboyCollection/master/"
 
     def item(self, lic="MIT", url=None):
@@ -371,37 +370,23 @@ class Catalog(unittest.TestCase):
         self.assertIs(m.catalog_lookup(items, "Something else", ["Ardu-EZ Button (World) (Program) (Erwin's Collection).hex"]), items[0])
         self.assertIsNone(m.catalog_lookup(items, "Unrelated", []))
 
-    def test_fetch_keeps_only_hash_verified_files(self):
-        real = m.http_get
-        try:
-            m.http_get = lambda url, max_bytes, timeout=60: self.HEX
-            with tempfile.TemporaryDirectory() as d:
-                ents = [{"MD5": hashlib.md5(self.HEX).hexdigest(), "Name": "Ardu-EZ Button (World).hex"}]
-                path, why = m.fetch_homebrew_rom(self.item(), ents, "arduboy", Path(d))
-                self.assertEqual(why, "")
-                self.assertEqual(path.read_bytes(), self.HEX)
-                self.assertIn("license MIT", Path(str(path) + ".source.txt").read_text(encoding="utf-8"))
-                # RA registered a different build -> nothing is kept
-                other = [{"MD5": "0" * 32, "Name": "x.hex"}]
-                path2, why2 = m.fetch_homebrew_rom(self.item(), other, "arduboy", Path(d, "o"))
-                self.assertIsNone(path2)
-                self.assertIn("differs", why2)
-                self.assertFalse(Path(d, "o").exists())
-        finally:
-            m.http_get = real
-
-    def test_downloads_only_from_the_catalog_repository(self):
-        calls = []
-        real = m.http_get
-        try:
-            m.http_get = lambda url, max_bytes, timeout=60: calls.append(url) or self.HEX
-            with tempfile.TemporaryDirectory() as d:
-                path, why = m.fetch_homebrew_rom(self.item(url="https://evil.example.com/x.hex"),
-                                                 [{"MD5": hashlib.md5(self.HEX).hexdigest(), "Name": "n.hex"}], "arduboy", Path(d))
-                self.assertIsNone(path)
-                self.assertEqual(calls, [])
-        finally:
-            m.http_get = real
+    def test_imported_collection_is_matched_by_hash(self):
+        """Clone-style layout: <library>/arduboy/<Collection>/<Category>/<Game>/game.hex plus extra files."""
+        hexdata = b":100000000C945D00\r\n" * 40                    # CRLF checkout, as on Windows
+        with tempfile.TemporaryDirectory() as d:
+            game = Path(d, "Arduboy", "ArduboyCollection", "Action", "Some Game")
+            game.mkdir(parents=True)
+            (game / "game.hex").write_bytes(hexdata)
+            (game / "game.ini").write_text("[game]\nlicense=MIT\n")
+            (game / "banner.png").write_bytes(b"x" * 2000)
+            db = m.open_db(Path(d)) if False else __import__("sqlite3").connect(":memory:")
+            db.execute("create table files(path text primary key, size int, mtime real, hashes text)")
+            spec = m.build_console_table(m.FALLBACK_CONSOLES)["arduboy"]
+            idx = m.index_console(db, Path(d), spec, 10**7)
+            want = hashlib.md5(hexdata.replace(b"\r\n", b"\n")).hexdigest()   # RA: Unix line endings
+            self.assertEqual([os.path.basename(p) for p in idx[want]], ["game.hex"])
+            self.assertEqual(sum(len(v) for v in idx.values()) > 0, True)
+            self.assertFalse(any(p.endswith((".ini", ".png")) for v in idx.values() for p in v))
 
     def test_report_links_author_page_and_license(self):
         miss = {"id": 5, "title": "~Homebrew~ Ardu-EZ Button", "key": "arduboy",

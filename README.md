@@ -139,19 +139,19 @@ By default only small cartridge systems are selected. Choose differently with
 (case and punctuation are ignored; aliases like `sfc`/`snes`/`super-nintendo` are built in);
 map yours with `console_overrides`.
 
-### Homebrew catalogs (Arduboy)
+### Arduboy
 
-For Arduboy, the community catalog [Erwin's Arduboy Collection](https://arduboy.ried.cl/) (`repo.json`,
-which its maintainer offers as a data source for other tools) is used to put the **author's own page,
-author name and license** next to each missing game in the report. Games the catalog does not list get
-a GitHub search link.
+Arduboy games are `.hex` files (RetroAchievements hashes them with Unix line endings) and are matched by
+hash like any cartridge system. The easy way to get a library: import the community collection
+[Erwin's Arduboy Collection](https://github.com/eried/ArduboyCollection) into your `arduboy` folder, e.g.
 
-Optionally, `fetch_homebrew = true` also downloads the single `.hex` of a wanted, missing game from
-the collection's GitHub repository. Safeguards: off by default, only licenses that allow it (MIT, BSD,
-GPL, Apache, CC0, ... - never "Proprietary", "Unspecified" or non-commercial ones), only from the
-catalog's own repository, nothing bigger than 16 MB, a file is kept only if it matches the hash RA
-registered, and the author/license are recorded next to it (`*.source.txt`). Only what your list needs
-is fetched, once. Please credit and support the authors.
+```
+git clone --depth 1 https://github.com/eried/ArduboyCollection.git /path/to/library/arduboy/ArduboyCollection
+```
+
+(per-game licenses vary, see the collection). The tool finds the right `.hex` files inside by hash; nothing is
+ever downloaded by the tool itself. Its catalog (`repo.json`, offered by the maintainer as a data source) is
+only read to show the **author's page and license** next to a missing game in the report.
 
 ### Missing ROMs, links and patches
 

@@ -56,11 +56,6 @@ build_patches = true
 # the game "vanilla enough" to be worth preferring.
 # build_variants = ["Fix", "Improvement"]
 
-# Download missing homebrew from a community catalog (Arduboy) - permissive licenses only, verified by
-# RA hash, only what your list needs. Off by default.
-# fetch_homebrew = true
-# homebrew_dir = "/path/to/homebrew"          # default: <state_dir>/homebrew
-
 # Free downloads from the authors for homebrew: sources.json next to the script is read
 # automatically; add your own file here (same format) if you like.
 # sources_file = "/path/to/my-sources.json"
