@@ -17,7 +17,7 @@
 """ra-wtp-sync: mirror a RetroAchievements "Want to Play" list into a folder.
 
 Point it at a (read-only) ROM library and an output folder, e.g. one that
-Syncthing shares with your handhelds. It copies one RA-compatible ROM per game
+your own sync tool shares with your handhelds. It copies one RA-compatible ROM per game
 on your Want to Play list and removes the copy again when you take the game off
 the list.
 
@@ -1224,7 +1224,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--username", help="RetroAchievements user name")
     ap.add_argument("--api-key-file", dest="api_key_file", help="file holding the RA Web API key (or set $RA_API_KEY)")
     ap.add_argument("--src", help="ROM library (read-only)")
-    ap.add_argument("--dest", help="output folder (e.g. your Syncthing folder)")
+    ap.add_argument("--dest", help="output folder (the folder your sync tool shares)")
     ap.add_argument("--state-dir", dest="state_dir", help="cache + manifest location")
     ap.add_argument("--saves", nargs="*", help="save folders; a ROM that already has a save here is preferred")
     ap.add_argument("--consoles", help="comma separated console keys/ids, or \"all\" (see --list-consoles)")

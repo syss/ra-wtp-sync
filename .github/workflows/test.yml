@@ -1,23 +1,39 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 ra-wtp-sync contributors
 name: tests
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.11", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Compile all scripts
-        run: python -m py_compile ra_wtp_sync.py ra_wtp_gui.py setup.py
+        run: python -m py_compile ra_wtp_sync.py ra_wtp_gui.py ra_wtp_schedule.py setup.py
       - name: Unit tests
         run: python tests/run_ci.py
       - name: CLI smoke test (console list works offline)
         run: python ra_wtp_sync.py --list-consoles --state-dir ci-state
+      - name: GUI smoke test (server starts and serves the page)
+        run: python tests/gui_smoke.py

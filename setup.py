@@ -21,10 +21,11 @@ from __future__ import annotations
 import getpass
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import ra_wtp_schedule
 
 HERE = Path(__file__).resolve().parent
 SYNC = HERE / "ra_wtp_sync.py"
@@ -59,41 +60,7 @@ def toml_list(items: list[str]) -> str:
 
 def schedule(minutes: int = 30) -> None:
     """Install a recurring job with the OS's own scheduler."""
-    py = sys.executable
-    if sys.platform == "win32":
-        pyw = Path(py).with_name("pythonw.exe")           # no console window
-        exe = str(pyw if pyw.exists() else py)
-        cmd = f'"{exe}" "{SYNC}"'
-        r = subprocess.run(["schtasks", "/Create", "/F", "/TN", "ra-wtp-sync", "/SC", "MINUTE",
-                            "/MO", str(minutes), "/TR", cmd], capture_output=True, text=True)
-        print(r.stdout.strip() or r.stderr.strip())
-    elif sys.platform == "darwin":
-        plist = Path.home() / "Library/LaunchAgents/ra-wtp-sync.plist"
-        log = Path.home() / "Library/Logs/ra-wtp-sync.log"
-        plist.parent.mkdir(parents=True, exist_ok=True)
-        plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>ra-wtp-sync</string>
-<key>ProgramArguments</key><array><string>{py}</string><string>{SYNC}</string></array>
-<key>StartInterval</key><integer>{minutes * 60}</integer>
-<key>RunAtLoad</key><true/>
-<key>Nice</key><integer>10</integer>
-<key>StandardOutPath</key><string>{log}</string><key>StandardErrorPath</key><string>{log}</string>
-</dict></plist>
-""", encoding="utf-8")
-        subprocess.run(["launchctl", "unload", str(plist)], capture_output=True)
-        r = subprocess.run(["launchctl", "load", str(plist)], capture_output=True, text=True)
-        print(f"LaunchAgent installed: {plist}" if r.returncode == 0 else r.stderr.strip())
-    else:
-        if not shutil.which("crontab"):
-            print("No crontab found. Use the systemd timer from examples/ instead.")
-            return
-        line = f'7,37 * * * * nice -n 10 "{py}" "{SYNC}" >> "{HERE / "cron.log"}" 2>&1'
-        old = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout.splitlines()
-        new = [l for l in old if str(SYNC) not in l] + [line]
-        subprocess.run(["crontab", "-"], input="\n".join(new) + "\n", text=True, check=True)
-        print("Cron entry installed:\n  " + line)
+    print(ra_wtp_schedule.install(minutes)[1])
 
 
 def main() -> int:
@@ -123,7 +90,7 @@ def main() -> int:
     src = ask("ROM library to read from (never modified)", str(Path.home() / "roms"))
     if not Path(src).expanduser().is_dir():
         print(f"  (note: {src} does not exist yet)")
-    dest = ask("Output folder, e.g. inside your Syncthing folder", str(Path.home() / "Sync" / "roms-wtp"))
+    dest = ask("Output folder (the sync target; add-ons such as Syncthing can share it later)", str(Path.home() / "roms-wtp"))
     saves = ask("RetroArch saves folder, to prefer ROMs that already have a save (empty = none)", default_saves())
 
     print("\n== Choices ==")

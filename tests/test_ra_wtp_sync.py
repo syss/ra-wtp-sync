@@ -437,5 +437,25 @@ class Portability(unittest.TestCase):
             self.assertIn("\u30c6\u30b9\u30c8", p.read_text(encoding="utf-8"))
 
 
+class Schedule(unittest.TestCase):
+    def test_platform_order_is_linux_win_mac(self):
+        import ra_wtp_schedule as sc
+        self.assertEqual(sc.PLATFORMS, ("linux", "win", "mac"))
+        self.assertEqual([sc.LABELS[k] for k in sc.PLATFORMS], ["Linux", "Windows", "macOS"])
+
+    def test_manual_instructions_per_platform(self):
+        import ra_wtp_schedule as sc
+        self.assertIn("crontab", sc.manual("linux"))
+        self.assertIn("schtasks", sc.manual("win", 15))
+        self.assertIn("/MO 15", sc.manual("win", 15))
+        self.assertIn("StartInterval", sc.manual("mac", 10))
+        self.assertIn("<integer>600</integer>", sc.manual("mac", 10))
+
+    def test_cron_interval(self):
+        import ra_wtp_schedule as sc
+        self.assertTrue(sc.cron_line(30).startswith("7,37 "))
+        self.assertTrue(sc.cron_line(15).startswith("*/15 "))
+
+
 if __name__ == "__main__":
     unittest.main()
