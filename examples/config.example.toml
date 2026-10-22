@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ra-wtp-sync contributors
+
+# Copy to ~/.config/ra-wtp-sync/config.toml and adjust.
+# Every key can also be given on the command line (see `ra-wtp-sync --help`).
+
+username = "YourRAUsername"
+
+# Your RetroAchievements Web API key: https://retroachievements.org/settings -> Keys
+# Either export RA_API_KEY, or put the key (only the key) in this file (chmod 600).
+api_key_file = "~/.config/ra-wtp-sync/api_key"   # relative paths are relative to the working directory
+
+# Your ROM library. Opened read-only; nothing is ever written, moved or deleted here.
+src = "/path/to/roms"
+
+# Output folder. It is owned by this tool: one sub-folder per system, and only files
+# this tool copied are ever deleted. Point your Syncthing/other sync folder at it.
+dest = "/path/to/synced-folder/roms-wtp"
+
+# Where the hash cache and the manifest live (not synced).
+state_dir = "~/.local/state/ra-wtp-sync"
+
+# Folders with existing save files (RetroArch "saves" dir, searched recursively).
+# If several ROMs would work, the one that already has a save is chosen first.
+saves = []
+
+# Also keep games you started but have not beaten yet (default: only Want to Play).
+include_started = false
+
+# Systems to handle. Skip the ones with huge ROMs (disc based systems are not
+# supported anyway). Available: megadrive n64 snes gb gba gbc nes pcengine
+# mastersystem gamegear pokemini virtualboy channelf atari2600
+consoles = ["n64", "snes", "nes", "gb", "gbc", "gba", "megadrive", "mastersystem"]
+
+# Skip ROM files larger than this (MB) while hashing.
+max_rom_mb = 200
+
+# How long RA hash lists are cached.
+hash_cache_days = 7
+
+# Safety net: if the RA list shrinks below this fraction of what is already synced
+# (API outage, wrong username, ...), nothing is deleted.
+min_list_fraction = 0.5
+
+# When several ROMs in your library match RA's hashes, ONE is picked. The first
+# criterion in `order` that distinguishes them decides.
+[preferences]
+order = ["save", "qol", "language", "region", "revision"]
+# save     a ROM that already has a save file in `saves`
+# qol      names that look like quality-of-life / fixed / enhanced versions
+# language languages = [...]  e.g. ["de", "en"]   (de fr es it ja en)
+# region   regions   = [...]  e.g. ["europe", "usa"]   (europe usa japan world)
+# revision highest "Rev X" / "v1.x" / PRG number
+languages = ["en"]
+regions = ["europe", "usa"]
+
+# Your library uses other folder names? Map them (matched case-insensitively
+# below `src`). You can also define systems that are not built in.
+# [console_overrides.n64]
+# dirs = ["Nintendo 64", "n64-hacks"]
+#
+# [console_overrides.mysystem]
+# id = 99          # RetroAchievements console id
+# hash = "plain"   # plain | nes | snes | n64
+# dirs = ["mysystem"]

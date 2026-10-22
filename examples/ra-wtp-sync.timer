@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ra-wtp-sync contributors
+
+[Unit]
+Description=Run ra-wtp-sync regularly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

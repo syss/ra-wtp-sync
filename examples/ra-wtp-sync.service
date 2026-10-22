@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ra-wtp-sync contributors
+
+[Unit]
+Description=Mirror RetroAchievements Want to Play list into the ROM sync folder
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /path/to/ra-wtp-sync/ra_wtp_sync.py
+Nice=10
+IOSchedulingClass=idle
