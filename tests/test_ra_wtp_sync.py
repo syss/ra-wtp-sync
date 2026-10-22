@@ -437,6 +437,76 @@ class Portability(unittest.TestCase):
             self.assertIn("\u30c6\u30b9\u30c8", p.read_text(encoding="utf-8"))
 
 
+class MergeMode(unittest.TestCase):
+    """dest_mode = "merge": add into an existing ROM folder without touching anything else."""
+    ROM = b"merge-test-rom" * 100
+
+    def run_sync(self, root, listing, dest_mode="merge"):
+        md5 = hashlib.md5(self.ROM).hexdigest()
+
+        def fake_api(endpoint, key, **kw):
+            if endpoint == "API_GetUserWantToPlayList.php":
+                return {"Results": listing, "Total": len(listing)}
+            if endpoint == "API_GetGameHashes.php":
+                return {"Results": [{"MD5": md5, "Name": "Game.gb"}]}
+            raise RuntimeError(endpoint)
+
+        cfg = dict(m.DEFAULTS, username="u", src=str(root / "lib"), dest=str(root / "roms"),
+                   state_dir=str(root / "state"), consoles=["gb"], dest_mode=dest_mode, build_patches=False)
+        old = m.api, os.environ.get("RA_API_KEY")
+        m.api, os.environ["RA_API_KEY"] = fake_api, "x"
+        try:
+            return m.sync(cfg, False)
+        finally:
+            m.api = old[0]
+            os.environ.pop("RA_API_KEY") if old[1] is None else os.environ.update(RA_API_KEY=old[1])
+
+    def test_reuses_existing_folder_and_leaves_other_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            (root / "lib" / "gb").mkdir(parents=True)
+            (root / "lib" / "gb" / "Game.gb").write_bytes(self.ROM)
+            mine = root / "roms" / "Game Boy" / "my own.gb"
+            mine.parent.mkdir(parents=True)
+            mine.write_text("keep me")
+            listing = [{"ID": 1, "Title": "Game", "ConsoleID": 4}]
+            self.run_sync(root, listing)
+            added = root / "roms" / "Game Boy" / "Game.gb"
+            self.assertTrue(added.exists(), "copied into the existing, differently spelled folder")
+            self.assertFalse((root / "roms" / "gb").exists())
+            # game leaves the list: only our copy goes, the folder and the user's file stay
+            self.run_sync(root, [{"ID": 2, "Title": "Other", "ConsoleID": 99}])
+            self.assertFalse(added.exists())
+            self.assertTrue(mine.exists())
+
+    def test_never_overwrites_or_deletes_foreign_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            (root / "lib" / "gb").mkdir(parents=True)
+            (root / "lib" / "gb" / "Game.gb").write_bytes(self.ROM)
+            theirs = root / "roms" / "gb" / "Game.gb"
+            theirs.parent.mkdir(parents=True)
+            theirs.write_text("different content")
+            self.run_sync(root, [{"ID": 1, "Title": "Game", "ConsoleID": 4}])
+            self.assertEqual(theirs.read_text(), "different content")
+            self.run_sync(root, [{"ID": 2, "Title": "Other", "ConsoleID": 99}])
+            self.assertTrue(theirs.exists(), "an untracked file is never deleted")
+
+    def test_new_mode_still_uses_plain_key_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(m.dest_folder(Path(d), "gb", ["gb", "gameboy"], False), "gb")
+            (Path(d) / "Game Boy").mkdir()
+            self.assertEqual(m.dest_folder(Path(d), "gb", ["gb", "gameboy"], False), "gb")
+            self.assertEqual(m.dest_folder(Path(d), "gb", ["gb", "gameboy"], True), "Game Boy")
+
+    def test_merge_may_contain_library_but_not_equal_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = dict(m.DEFAULTS, username="u", src=d, dest=d, dest_mode="merge", state_dir=os.path.join(d, "s"))
+            os.environ["RA_API_KEY"] = "x"
+            with self.assertRaises(SystemExit):
+                m.sync(cfg, True)
+
+
 class Login(unittest.TestCase):
     def test_key_shape(self):
         self.assertTrue(m.looks_like_key("Ab3dE5fGh7Ij9kLm1nOp3qRs5tUv7wXy"))

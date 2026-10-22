@@ -20,6 +20,12 @@ src = "/path/to/roms"
 # this tool copied are ever deleted. Any sync tool (e.g. the optional Syncthing add-on, see README) can share it.
 dest = "/path/to/synced-folder/roms-wtp"
 
+# "new" (default): dest is a folder this tool owns.
+# "merge": dest is your EXISTING ROM folder (frontend, handheld SD card, ...). Existing system folders
+# are reused whatever their spelling (GBA, Game Boy Advance, gba ...), a file that is already there is
+# never overwritten, and only files this tool added are ever removed. (CLI: --merge)
+# dest_mode = "new"
+
 # Where the hash cache and the manifest live (not synced).
 # state_dir = "/path/to/state"   # default: per-user state folder (see README)
 
