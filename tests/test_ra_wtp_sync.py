@@ -437,6 +437,13 @@ class Portability(unittest.TestCase):
             self.assertIn("\u30c6\u30b9\u30c8", p.read_text(encoding="utf-8"))
 
 
+class Login(unittest.TestCase):
+    def test_key_shape(self):
+        self.assertTrue(m.looks_like_key("Ab3dE5fGh7Ij9kLm1nOp3qRs5tUv7wXy"))
+        self.assertFalse(m.looks_like_key("short"))
+        self.assertFalse(m.looks_like_key("Ab3dE5fGh7Ij9kLm1nOp3qRs5tUv7wX!"))
+
+
 class Schedule(unittest.TestCase):
     def test_platform_order_is_linux_win_mac(self):
         import ra_wtp_schedule as sc

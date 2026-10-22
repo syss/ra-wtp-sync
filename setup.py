@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import ra_wtp_schedule
+import ra_wtp_sync
 
 HERE = Path(__file__).resolve().parent
 SYNC = HERE / "ra_wtp_sync.py"
@@ -77,10 +78,15 @@ def main() -> int:
     if not user:
         print("username is required")
         return 1
-    print("Web API key: https://retroachievements.org/settings  ->  Keys")
+    print("Web API key: log in at https://retroachievements.org, open Settings, scroll to 'Keys' and copy the")
+    print("'Web API Key' (32 letters and digits, e.g. Ab3dE5fGh7Ij9kLm1nOp3qRs5tUv7wXy - this one is just an example).")
     key = getpass.getpass("Paste your API key (input hidden), then press Enter: ").strip()
     if not key:
         print("API key is required")
+        return 1
+    ok, msg = ra_wtp_sync.check_login(key, user)
+    print(msg)
+    if not ok and not yes("Continue anyway?", False):
         return 1
     key_path.touch(mode=0o600)
     key_path.chmod(0o600)

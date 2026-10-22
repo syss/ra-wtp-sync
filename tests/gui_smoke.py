@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -22,6 +23,8 @@ with tempfile.TemporaryDirectory() as tmp:
         req = urllib.request.Request(url + "api/state", headers={"X-Token": token})
         state = json.load(urllib.request.urlopen(req, timeout=30))
         assert [x["label"] for x in state["schedule"]["platforms"]] == ["Linux", "Windows", "macOS"], state["schedule"]
+        req = urllib.request.Request(url + "api/browse?path=" + urllib.parse.quote(tmp), headers={"X-Token": token})
+        assert json.load(urllib.request.urlopen(req, timeout=10))["path"], "browse"
         print("GUI OK")
     finally:
         p.terminate()
