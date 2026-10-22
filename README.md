@@ -35,42 +35,50 @@ It comes as a **script** (`ra_wtp_sync.py`, for the command line and schedulers)
 Python 3.11 or newer on **Linux, Windows or macOS** (tested on all three by CI). Nothing else to
 install. Below, `python` means `python3` on Linux/macOS and `py` (or `python`) on Windows.
 
-## Quick start
+## Start here (no experience needed)
 
-Run the guided setup. It asks a few questions (you paste your API key when asked), writes
-the git-ignored `config.toml`, runs a dry run, and can schedule the sync with your OS's scheduler.
+1. **Get the files.** On this page click the green **Code** button → **Download ZIP**, and unzip it
+   somewhere (or `git clone` it).
+2. **Install Python 3.11 or newer** if you do not have it yet (free, from
+   [python.org/downloads](https://www.python.org/downloads/); on Windows tick *Add python.exe to PATH*).
+3. **Open the settings page** by starting the launcher for your system:
+
+   | System | Do this |
+   | --- | --- |
+   | Linux | run `./start-gui.sh` (or `python3 ra_wtp_gui.py`) |
+   | Windows | double-click `start-gui.bat` |
+   | macOS | double-click `start-gui.command` (first time: right-click → Open) |
+
+4. In the page that opens in your browser, follow the four numbered steps: account, folders, systems,
+   *Save & preview*. The page explains where to find your API key and has a **Test login** button.
+   Then press **Save & run now**, and optionally set up the **Schedule** at the bottom (one tab per
+   system, in the order Linux, Windows, macOS; your own system's tab installs the job with one click).
+
+The page is served on 127.0.0.1 only and needs no extra packages.
+
+**Your API key**, in short: log in at [retroachievements.org](https://retroachievements.org) →
+[Settings](https://retroachievements.org/settings) → **Keys** → copy the **Web API Key**. It is 32 letters
+and digits, for example `Ab3dE5fGh7Ij9kLm1nOp3qRs5tUv7wXy` (an example; yours is different). The tool
+only uses it to read your Want to Play list and stores it in a file only your user can read.
+
+## Command line
+
+Guided setup in the terminal (asks the same questions, writes `config.toml`, does a dry run and can
+schedule the sync): `python setup.py`. Or by hand:
 
 ```
 git clone <this repo>
 cd ra-wtp-sync
-python setup.py
-```
-
-### GUI
-
-`python ra_wtp_gui.py` opens a small settings page in your browser (served on 127.0.0.1 only,
-no extra packages): pick consoles, folders and preferences, save, start a dry run or a real run,
-and install the recurring schedule. The *Schedule* section has one tab per system, in the order
-**Linux, Windows, macOS**; the tab for the system you are on can install the job with one click, the
-others show the exact command to use there.
-
-### Script
-
-Guided setup: `python setup.py` (below). Manual setup:
-
-Manual setup:
-
-```
 cp examples/config.example.toml config.toml     # Windows: copy examples\config.example.toml config.toml
 # edit config.toml: username, src, dest, ...
 python ra_wtp_sync.py --dry-run                  # see what would happen
 python ra_wtp_sync.py                            # do it
 ```
 
-API key: get it at https://retroachievements.org/settings (Keys) and either `export RA_API_KEY=...`
-(Windows: `set RA_API_KEY=...`) or save it, and nothing else, in a file named by `api_key_file`
-(default: `api_key` in your user config folder, see below; a relative path is resolved next to the
-script). `setup.py` and the GUI do this for you and restrict the file to your user.
+API key: either `export RA_API_KEY=...` (Windows: `set RA_API_KEY=...`) or save it, and nothing else, in
+a file named by `api_key_file` (default: `api_key` in your user config folder, see below; a relative
+path is resolved next to the script). `setup.py` and the GUI do this for you and restrict the file to
+your user.
 
 The first run hashes your library (cached afterwards, keyed by size and mtime), so it can take a
 few minutes for a big collection; later runs only look at new files.
@@ -214,6 +222,10 @@ handhelds and other PCs. This tool only fills the folder.
 * Copies are written through a `.syncthing.<name>.tmp` file, which Syncthing ignores, so peers never
   see a half-written ROM.
 * Keep `state_dir` (hash cache, manifest) outside the shared folder; it is not meant to be synced.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the code layout and how to add a console, a language or a platform.
 
 ## Development
 

@@ -347,6 +347,33 @@ def api(endpoint: str, key: str, **params):
     raise RuntimeError(f"RA API call failed: {endpoint}")
 
 
+def looks_like_key(key: str) -> bool:
+    """RA Web API keys are 32 letters/digits; used for a friendly hint only."""
+    return len(key) == 32 and key.isalnum()
+
+
+def check_login(key: str, user: str) -> tuple[bool, str]:
+    """One cheap call that tells a newcomer whether username and key work (never exits)."""
+    q = urllib.parse.urlencode({"y": key, "z": user, "u": user, "c": 1})
+    req = urllib.request.Request(f"{API}API_GetUserWantToPlayList.php?{q}", headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return False, "RetroAchievements rejected the API key. Copy it again from Settings -> Keys (Web API Key)."
+        if e.code == 404:
+            return False, "RetroAchievements does not know that username."
+        return False, f"RetroAchievements answered with HTTP {e.code}."
+    except (urllib.error.URLError, ValueError, TimeoutError) as e:
+        if isinstance(getattr(e, "reason", None), ssl.SSLCertVerificationError):
+            return False, "TLS certificate check failed (macOS: run 'Install Certificates.command' from your Python folder)."
+        return False, "Could not reach retroachievements.org - check your internet connection."
+    if isinstance(data, dict) and data.get("Total") is not None:
+        return True, f"Login works. {data['Total']} game(s) on your Want to Play list."
+    return False, "Unexpected answer - check username and key."
+
+
 def paged(endpoint, key, user, **extra):
     off, results = 0, []
     while True:

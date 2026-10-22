@@ -147,6 +147,36 @@ class State:
         self.proc.wait()
         self.log.append(f"-- finished (exit code {self.proc.returncode}) --")
 
+    def browse(self, path: str) -> dict:
+        """List sub-folders so the page can offer a folder picker (this machine only)."""
+        if not path:
+            if sys.platform == "win32":
+                import string
+                drives = [f"{c}:\\" for c in string.ascii_uppercase if Path(f"{c}:\\").exists()]
+                return {"path": "", "parent": None, "dirs": [{"name": d, "path": d} for d in drives], "home": str(Path.home())}
+            path = str(Path.home())
+        p = Path(path).expanduser()
+        while not p.is_dir() and p != p.parent:
+            p = p.parent
+        try:
+            dirs = [{"name": d.name, "path": str(d)} for d in sorted(p.iterdir(), key=lambda x: x.name.lower())
+                    if d.is_dir() and not d.name.startswith(".")]
+        except OSError:
+            dirs = []
+        parent = str(p.parent) if p.parent != p else ("" if sys.platform == "win32" else None)
+        return {"path": str(p), "parent": parent, "dirs": dirs, "home": str(Path.home())}
+
+    def test_login(self, body: dict) -> dict:
+        cfg = self.load()
+        user = (body.get("username") or cfg["username"] or "").strip()
+        key = (body.get("api_key") or "").strip() or self.api_key(cfg) or ""
+        if not user or not key:
+            return {"ok": False, "message": "Enter your username and API key first."}
+        ok, msg = core.check_login(key, user)
+        if ok and not core.looks_like_key(key):
+            msg += " (Note: the key looks unusual - they normally have 32 characters.)"
+        return {"ok": ok, "message": msg}
+
     def report(self) -> str:
         cfg = self.load()
         p = Path(cfg["report_file"] or Path(cfg["state_dir"]).expanduser() / "missing-roms.txt").expanduser()
@@ -191,6 +221,10 @@ def make_handler(st: State, port: int):
                 since = int(self.path.split("since=")[-1]) if "since=" in self.path else 0
                 running = bool(st.proc and st.proc.poll() is None)
                 self._send(json.dumps({"lines": st.log[since:], "next": len(st.log), "running": running}).encode())
+            elif path == "/api/browse" and self._auth():
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                self._send(json.dumps(st.browse(q.get("path", [""])[0])).encode())
             elif path == "/api/report" and self._auth():
                 self._send(st.report().encode(), "text/plain")
             else:
@@ -206,6 +240,8 @@ def make_handler(st: State, port: int):
             elif self.path == "/api/run":
                 st.save(body)
                 self._send(json.dumps({"ok": st.run(bool(body.get("dry")))}).encode())
+            elif self.path == "/api/test":
+                self._send(json.dumps(st.test_login(body)).encode())
             elif self.path == "/api/schedule":
                 minutes = max(5, min(int(body.get("minutes", 30)), 1440))
                 ok, msg = sched.remove() if body.get("remove") else sched.install(minutes)
@@ -256,45 +292,66 @@ button.p{background:var(--acc);border-color:var(--acc);color:#fff}button:disable
 .bar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.hint{color:var(--mut);font-size:13px}
 pre{background:#0d1117;color:#d1d5db;padding:12px;border-radius:8px;max-height:340px;overflow:auto;white-space:pre-wrap;font-size:12.5px}
 .sticky{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 0;margin-top:20px;display:flex;gap:8px;flex-wrap:wrap}
-.ok{color:#16a34a}
+.ok{color:#16a34a}.bad{color:#dc2626}
+.pick{display:flex;gap:8px}.pick input{flex:1}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);width:min(560px,92vw)}
+.dl{max-height:320px;overflow:auto;margin:8px 0}.dl div{padding:5px 8px;cursor:pointer;border-radius:5px}.dl div:hover{background:var(--acc2)}
+details summary{cursor:pointer;margin:8px 0}
 .tabs{display:flex;gap:4px;margin-bottom:8px}.tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 details.card summary{cursor:pointer}pre#schedcmd{max-height:220px}
 </style></head><body><main>
 <h1>ra-wtp-sync</h1>
-<p class="s">Mirror your RetroAchievements <em>Want to Play</em> list into a folder. Config: <code id="cfgpath"></code></p>
+<p class="s">Mirror your RetroAchievements <em>Want to Play</em> list into a folder. Settings file: <code id="cfgpath"></code></p>
 
-<h2>Account</h2><div class="card"><div class="row">
-<div><label class="f">RetroAchievements username</label><input type="text" id="username"></div>
-<div><label class="f">Web API key <span class="hint" id="keystate"></span></label><input type="password" id="apikey" autocomplete="off" placeholder="paste here (leave empty to keep the saved key)"></div>
-</div><p class="hint">Get the key at retroachievements.org → Settings → Keys. It is stored in a file with mode 600, never shown again.</p></div>
+<div class="card" id="welcome"><b>New here? Four steps and you are done:</b>
+<ol><li>Enter your RetroAchievements <b>username</b> and <b>API key</b> (help below).</li>
+<li>Pick the folder with <b>your ROMs</b> and an <b>output folder</b> for the games you want to play.</li>
+<li>Tick the <b>systems</b> you care about (the default is fine).</li>
+<li>Press <b>Preview</b> to see what would happen, then <b>Run now</b>. Nothing in your ROM folder is ever changed.</li></ol></div>
 
-<h2>Folders</h2><div class="card">
-<label class="f">ROM library to read from <span class="hint">(never modified)</span></label><input type="text" id="src" placeholder="/path/to/roms">
-<label class="f">Output folder <span class="hint">(owned by this tool: only files it copied are ever deleted)</span></label><input type="text" id="dest" placeholder="/path/to/roms-wtp">
-<label class="f">Save-file folders <span class="hint">(one per line; a ROM that already has a save is preferred)</span></label><textarea id="saves" rows="2"></textarea>
+<h2>1. Your RetroAchievements account</h2><div class="card"><div class="row">
+<div><label class="f">Username</label><input type="text" id="username" placeholder="e.g. Scott"></div>
+<div><label class="f">Web API key <span class="hint" id="keystate"></span></label><input type="password" id="apikey" autocomplete="off" placeholder="e.g. Ab3dE5fGh7Ij9kLm1nOp3qRs5tUv7wXy"></div>
+</div>
+<div class="bar"><button onclick="testLogin()">Test login</button><span id="loginmsg" class="hint"></span></div>
+<details><summary><b>Where do I find my API key?</b></summary>
+<ol><li>Log in at <a href="https://retroachievements.org" target="_blank" rel="noopener">retroachievements.org</a> (free account).</li>
+<li>Open <a href="https://retroachievements.org/settings" target="_blank" rel="noopener">Settings</a> and scroll to the <b>Keys</b> section.</li>
+<li>Copy the <b>Web API Key</b> (not the Connect key). It is 32 letters and digits, like <code>Ab3dE5fGh7Ij9kLm1nOp3qRs5tUv7wXy</code> (an example, it will not work).</li>
+<li>Paste it above and press <b>Test login</b>.</li></ol>
+<p class="hint">The key is only used to read your Want to Play list. It is stored in a file readable by your user only and never shown again. If you ever leak it, press <i>Reset</i> next to it on the settings page.</p></details></div>
+
+<h2>2. Folders</h2><div class="card">
+<label class="f">Your ROM library <span class="hint">(read only, never modified)</span></label><div class="pick"><input type="text" id="src" placeholder="/path/to/roms"><button onclick="browse('src')">Browse…</button></div>
+<label class="f">Output folder <span class="hint">(the games from your list are copied here; only this tool's own files are ever deleted)</span></label><div class="pick"><input type="text" id="dest" placeholder="/path/to/roms-wtp"><button onclick="browse('dest')">Browse…</button></div>
 </div>
 
-<h2>Consoles</h2><div class="card">
-<div class="bar"><button onclick="sel('defaults')">Small cartridge systems</button><button onclick="sel('all')">Select all</button><button onclick="sel('none')">Select none</button><span class="hint" id="count"></span></div>
+<h2>3. Systems</h2><div class="card">
+<div class="bar"><button onclick="sel('defaults')">Recommended</button><button onclick="sel('all')">Select all</button><button onclick="sel('none')">Select none</button><span class="hint" id="count"></span></div>
 <b>Matched by hash</b> <span class="hint">– cartridge systems; only ROMs that earn achievements are copied</span>
 <div class="grid" id="hashgrid"></div>
-<p></p><b>Matched by title</b> <span class="hint">– discs and other formats RA hashes in its own way; files can be large (use CHD/ISO/RVZ/zip, not cue/bin)</span>
+<p></p><b>Matched by title</b> <span class="hint">– discs and other formats; files can be large (use CHD/ISO/RVZ/zip, not cue/bin)</span>
 <div class="grid" id="namegrid"></div></div>
 
-<h2>Choosing between several matching ROMs</h2><div class="card"><div class="row">
+<h2>4. Preview and run</h2><div class="card">
+<div class="bar"><button onclick="run(true)">Save &amp; preview (changes nothing)</button><button class="p" onclick="run(false)">Save &amp; run now</button><button onclick="report()">Show missing-ROMs list</button></div>
+<pre id="log">Nothing started yet.</pre></div>
+
+<h2>Advanced <span class="hint">(optional - the defaults are fine)</span></h2>
+<details class="card"><summary><b>Choosing between several matching ROMs, saves, patches</b></summary>
+<div class="row">
 <div><label class="f">Preferred languages <span class="hint">(first = most wanted)</span></label><div class="grid" id="langs"></div></div>
 <div><label class="f">Preferred regions</label><div class="grid" id="regions"></div></div></div>
-<p class="hint">Order of rules: existing save file → quality-of-life version → language → region → highest revision.</p></div>
-
-<h2>Options</h2><div class="card">
-<label><input type="checkbox" id="build"> Build missing hacks from RetroAchievements' official patches (needs the base ROM in your library)</label><br>
-<label><input type="checkbox" id="variants"> Also build RetroAchievements' official <b>Fix / Improvement</b> versions of games I own (e.g. Pokémon Emerald RNG fix); they are preferred over the plain ROM unless the plain one already has a save</label><br>
-<label><input type="checkbox" id="started"> Also keep games I started but have not beaten yet</label></div>
+<p class="hint">Order of rules: existing save file → quality-of-life version → language → region → highest revision.</p>
+<label class="f">Save-file folders <span class="hint">(one per line; a ROM that already has a save is preferred)</span></label><textarea id="saves" rows="2"></textarea>
+<p><label><input type="checkbox" id="build"> Build missing hacks from RetroAchievements' official patches (needs the base ROM in your library)</label><br>
+<label><input type="checkbox" id="variants"> Also build RetroAchievements' official <b>Fix / Improvement</b> versions of games I own (e.g. Pokémon Emerald RNG fix)</label><br>
+<label><input type="checkbox" id="started"> Also keep games I started but have not beaten yet</label></p></details>
 
 <h2>Schedule</h2><div class="card">
 <div class="tabs" id="schedtabs"></div>
 <pre id="schedcmd"></pre>
-<div class="bar"><button class="p" id="schedinst" onclick="schedule(false)">Run every</button>
+<div class="bar"><button class="p" id="schedinst" onclick="schedule(false)">Run automatically every</button>
 <input type="number" id="schedmin" value="30" min="5" max="1440" style="width:70px"> <span class="hint">minutes</span>
 <button onclick="schedule(true)">Remove schedule</button><span class="hint" id="schedmsg"></span></div>
 <p class="hint">Installing works for the system you are on; the other tabs show how to set it up by hand there.</p></div>
@@ -307,11 +364,9 @@ When a game leaves your list, the file is deleted there and Syncthing propagates
 <li>Mind the folder's file versioning if you want deletions to be final.</li>
 <li>Copies are written atomically via a <code>.syncthing.*.tmp</code> file that Syncthing ignores, so peers never see half-written files.</li></ul></details>
 
-<h2>Run</h2><div class="card">
-<div class="bar"><button onclick="run(true)">Save &amp; dry run</button><button class="p" onclick="run(false)">Save &amp; run now</button><button onclick="report()">Show missing-ROMs list</button></div>
-<pre id="log">Nothing started yet.</pre></div>
-
 <div class="sticky"><button class="p" onclick="save()">Save settings</button><span id="msg" class="hint"></span></div>
+<dialog id="dlg"><b id="dlgpath"></b><div id="dlglist" class="dl"></div>
+<div class="bar"><button onclick="dlg.close()">Cancel</button><button class="p" onclick="pickHere()">Use this folder</button></div></dialog>
 </main>
 <script>
 const T="__TOKEN__";let S,sel_=new Set(),langs=[],regions=[];
@@ -338,6 +393,16 @@ async function run(dry){try{const f=form();if(!f.config.username||!f.config.src|
  $("log").textContent="";since=0;const r=await (await api("/api/run",{method:"POST",body:JSON.stringify(Object.assign(f,{dry}))})).json();
  if(!r.ok){$("log").textContent="A run is already in progress.";}$("apikey").value="";clearInterval(timer);timer=setInterval(poll,800)}catch(e){}}
 async function poll(){const r=await (await api("/api/log?since="+since)).json();since=r.next;const l=$("log");if(r.lines.length){l.textContent+=r.lines.join("\n")+"\n";l.scrollTop=l.scrollHeight}if(!r.running&&!r.lines.length)clearInterval(timer)}
+let browseTarget,browsePath="";
+async function browse(id,path){browseTarget=id;const r=await (await api("/api/browse?path="+encodeURIComponent(path===undefined?$(id).value:path))).json();browsePath=r.path;
+ $("dlgpath").textContent=r.path||"Drives";const l=$("dlglist");l.innerHTML="";
+ const add=(label,p)=>{const d=document.createElement("div");d.textContent=label;d.onclick=()=>browse(id,p);l.appendChild(d)};
+ if(r.parent!==null)add("⬆ ..",r.parent);for(const d of r.dirs)add("📁 "+d.name,d.path);
+ if(!$("dlg").open)$("dlg").showModal()}
+function pickHere(){if(browsePath)$(browseTarget).value=browsePath;$("dlg").close()}
+async function testLogin(){const m=$("loginmsg");m.className="hint";m.textContent="Checking…";
+ const r=await (await api("/api/test",{method:"POST",body:JSON.stringify({username:$("username").value.trim(),api_key:$("apikey").value})})).json();
+ m.className=r.ok?"ok":"bad";m.textContent=r.message}
 async function report(){$("log").textContent=await (await api("/api/report")).text()}
 async function load(first){S=await (await api("/api/state")).json();const c=S.config;$("cfgpath").textContent=S.config_path;
  $("username").value=c.username;$("src").value=c.src;$("dest").value=c.dest;$("saves").value=c.saves.join("\n");
