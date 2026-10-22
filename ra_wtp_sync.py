@@ -164,6 +164,11 @@ DEFAULTS = {
     # RA also registers patched versions of games you may own (fixes, improvements, translations...).
     # List the patch categories to build for games already in your library, e.g. ["Fix", "Improvement"].
     "build_variants": [],
+    # Free homebrew from community catalogs (currently Arduboy: Erwin's Arduboy Collection). The catalog
+    # metadata (author page + license) always goes into the report; actually downloading a game is
+    # opt-in, limited to permissive licenses, and verified against RA's hash.
+    "fetch_homebrew": False,
+    "homebrew_dir": "",      # where downloaded homebrew is kept (default: <state_dir>/homebrew)
     "sources_file": "",      # extra JSON with free-download links (default: sources.json next to the script)
     "preferences": {
         # Earlier entries win. Choose from: save, qol, language, region, revision
@@ -901,6 +906,82 @@ def load_sources(cfg: dict) -> dict[str, dict]:
 
 
 
+# --------------------------------------------------------------------------- homebrew catalogs
+# console key -> machine readable catalog maintained by the community. repo.json is meant to be used by
+# other tools ("as a source to build your own application"); entries carry author, license and links.
+CATALOGS = {"arduboy": "https://arduboy.ried.cl/repo.json"}
+# Downloads are only accepted from the catalog's own GitHub repository.
+CATALOG_DOWNLOAD_PREFIX = "https://raw.githubusercontent.com/eried/ArduboyCollection/"
+MAX_HOMEBREW_BYTES = 16 * 1024 * 1024
+_NONFREE = re.compile(r"proprietary|unspecified|unknown|none|\bnc\b|-nc\b|noncommercial", re.I)
+_FREE = re.compile(r"^(mit|bsd|apache|gpl|lgpl|agpl|mpl|cc0|cc-by|unlicense|isc|zlib|wtfpl|public domain)", re.I)
+
+
+def http_get(url: str, max_bytes: int, timeout: int = 60) -> bytes | None:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read(max_bytes + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        log("  download failed:", url, e)
+        return None
+    return data if len(data) <= max_bytes else None
+
+
+def is_permissive(license_: str | None) -> bool:
+    """True for open-source style licenses; 'Proprietary', 'Unspecified' and NC licenses are not."""
+    lic = (license_ or "").strip()
+    return bool(lic) and not _NONFREE.search(lic) and bool(_FREE.match(lic))
+
+
+def load_catalog(key: str, state: Path, ttl_days: float) -> list[dict]:
+    url = CATALOGS.get(key)
+    if not url:
+        return []
+    cache = state / f"catalog-{key}.json"
+    if cache.exists() and time.time() - cache.stat().st_mtime < ttl_days * 86400:
+        raw = cache.read_bytes()
+    else:
+        raw = http_get(url, 20 * 1024 * 1024)
+        if raw is None:
+            return json.loads(cache.read_text(encoding="utf-8")).get("items", []) if cache.exists() else []
+        cache.write_bytes(raw)
+    try:
+        return json.loads(raw).get("items", [])
+    except ValueError:
+        return []
+
+
+def catalog_lookup(items: list[dict], title: str, rom_names: list[str]) -> dict | None:
+    """Catalog entry whose title equals the RA game title or one of RA's registered ROM names."""
+    wanted = {norm_title(title)} | {norm_title(stem(n)) for n in rom_names if n}
+    wanted.discard("")
+    return next((i for i in items if norm_title(i.get("title", "")) in wanted), None)
+
+
+def fetch_homebrew_rom(item: dict, ents: list[dict], style: str, out_dir: Path) -> tuple[Path | None, str]:
+    """Download the catalog's hex for `item`; keep it only if it matches a hash RA registered."""
+    wanted = {e["MD5"]: e.get("Name") for e in ents}
+    for b in item.get("binaries") or []:
+        url = b.get("filename") or ""
+        if not url.startswith(CATALOG_DOWNLOAD_PREFIX) or not url.lower().endswith((".hex", ".arduboy")):
+            continue
+        data = http_get(url, MAX_HOMEBREW_BYTES)
+        if not data:
+            continue
+        hit = next((wanted[h] for h in md5s(data, style) if h in wanted), None)
+        if hit is None:
+            return None, "the catalog's version differs from the one RA registered (different hash)"
+        out = out_dir / re.sub(r'[\\/:*?"<>|]+', " -", hit)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+        (out.parent / (out.name + ".source.txt")).write_text(
+            f"{item.get('title')} by {item.get('author')} - license {item.get('license')}\n"
+            f"{item.get('sourceUrl') or item.get('url')}\nfetched from {url}\n", encoding="utf-8")
+        return out, ""
+    return None, "the catalog lists no downloadable hex for it"
+
+
 # --------------------------------------------------------------------------- file ops
 def safe_remove(dest: Path, rel: str) -> None:
     p = Path(os.path.realpath(dest / rel))
@@ -929,14 +1010,23 @@ def find_links(m: dict, sources: dict) -> list[str]:
     if src:
         return [src["url"] + (f"   ({src['note']})" if src.get("note") else "")]
     links = []
+    cat = m.get("catalog")
+    if cat:   # the author's own page, from the community catalog
+        terms = "" if is_permissive(cat.get("license")) else " - not an open license: check the author's terms"
+        links.append(f"{cat.get('sourceUrl') or cat.get('url')}   (by {cat.get('author')}, license "
+                     f"{cat.get('license')}{terms}; listed in {m['key']} catalog)")
+        if cat.get("url") and cat.get("url") != cat.get("sourceUrl"):
+            links.append(f"{cat['url']}   (project / forum page)")
+        return links
     clean = re.sub(r"\[.*?\]", "", re.sub(r"^(~[^~]*~\s*)+", "", m["title"])).strip()
     if re.match(r"~(Homebrew|Demo)~", m["title"]):
         links.append("https://itch.io/search?q=" + urllib.parse.quote(clean))
     if m["key"] == "pokemini":
         links.append("https://pokemon-mini.net/   (community hub with Pokemon Mini homebrew downloads)")
-    if m["key"] == "arduboy":
-        links.append("https://arduboy.ried.cl/   (community catalog of Arduboy games with .hex downloads)")
-        links.append("https://arduboy.com/   (official site)")
+    if m["key"] == "arduboy":   # not in the community catalog: point at the places authors publish
+        q = urllib.parse.quote(clean)
+        links.append(f"https://github.com/search?q={q}+arduboy&type=repositories   (authors usually publish on GitHub)")
+        links.append("https://arduboy.com/   (official site; the community forum links most games)")
     return links
 
 
@@ -1011,6 +1101,14 @@ def sync(cfg: dict, dry_run: bool) -> int:
     failed: dict = json.loads(fail_path.read_text(encoding="utf-8")) if fail_path.exists() else {}
     failed = {k: v for k, v in failed.items() if isinstance(v, dict)}   # drop pre-1.0 float entries
     sources = load_sources(cfg)
+    homebrew_dir = Path(cfg["homebrew_dir"] or state / "homebrew").expanduser()
+    _catalogs: dict[str, list] = {}
+
+    def catalog_items(key_: str) -> list[dict]:
+        if key_ not in _catalogs:
+            _catalogs[key_] = load_catalog(key_, state, cfg["hash_cache_days"])
+        return _catalogs[key_]
+
     variant_cats = {c.lower() for c in cfg["build_variants"]}
     indexes: dict[int, dict] = {}
     plan: dict[str, tuple[str, str, str]] = {}
@@ -1029,7 +1127,7 @@ def sync(cfg: dict, dry_run: bool) -> int:
 
     for gid, (title, cid) in sorted(wanted.items()):
         name, spec = by_id[cid], table[by_id[cid]]
-        reason, ents, needs = "not in the library", [], []
+        reason, ents, needs, catalog = "not in the library", [], [], None
         if spec["hash"] == "name":                  # discs etc.: match by title
             if cid not in indexes:
                 log("indexing", name, "(by title)")
@@ -1040,8 +1138,20 @@ def sync(cfg: dict, dry_run: bool) -> int:
             hs = {e["MD5"] for e in ents}
             if cid not in indexes:
                 log("indexing", name)
-                indexes[cid] = index_console(db, src, spec, max_bytes, [patched_dir / name])
+                indexes[cid] = index_console(db, src, spec, max_bytes, [patched_dir / name, homebrew_dir / name])
             cands = {p for h in hs for p in indexes[cid].get(h, [])}
+            if not cands and name in CATALOGS:
+                catalog = catalog_lookup(catalog_items(name), title, [e.get("Name") for e in ents])
+                if catalog and cfg["fetch_homebrew"] and is_permissive(catalog.get("license")) and not dry_run:
+                    got, why = fetch_homebrew_rom(catalog, ents, spec["hash"], homebrew_dir / name)
+                    if got:
+                        log(f"  fetched {got.name} ({catalog.get('license')}, by {catalog.get('author')})")
+                        cands = {str(got)}
+                        indexes[cid].setdefault(next(iter(hs & md5s(got.read_bytes(), spec["hash"]))), []).append(str(got))
+                    else:
+                        reason = f"in the {name} catalog, but {why}"
+                elif catalog and cfg["fetch_homebrew"] and not is_permissive(catalog.get("license")):
+                    reason = f"in the {name} catalog under license '{catalog.get('license')}': not downloaded automatically"
             if not cands and cfg["build_patches"] and any(e["PatchUrl"] for e in ents):
                 old = failed.get(str(gid), {})
                 if time.time() - old.get("t", 0) < cfg["hash_cache_days"] * 86400:
@@ -1095,7 +1205,7 @@ def sync(cfg: dict, dry_run: bool) -> int:
                         failed[fkey] = {"t": time.time(), "why": why}
         if not cands:
             missing.append({"id": gid, "title": title, "console": spec["label"], "key": name, "reason": reason,
-                            "roms": [(e.get("Name"), e["MD5"]) for e in ents], "needs": needs})
+                            "roms": [(e.get("Name"), e["MD5"]) for e in ents], "needs": needs, "catalog": catalog})
             continue
         plan[str(gid)] = (title, name, min(cands, key=lambda p: rank(p, saved, cfg["preferences"])))
 

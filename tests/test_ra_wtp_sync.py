@@ -241,7 +241,7 @@ class Report(unittest.TestCase):
             self.assertIn("retroachievements.org/game/42", txt)
             self.assertIn("https://itch.io/search?q=Tiny%20Game", txt)   # homebrew without known source
             self.assertIn("pokemon-mini.net", txt)
-            self.assertIn("arduboy.ried.cl", m.find_links({"id": 1, "title": "Dinosaur", "key": "arduboy"}, {})[0])
+            self.assertIn("github.com/search?q=Dinosaur+arduboy", m.find_links({"id": 1, "title": "Dinosaur", "key": "arduboy"}, {})[0])
             self.assertIn("https://example.itch.io/known", txt)          # known author page wins
             self.assertNotIn("itch.io/search?q=Known", txt)
 
@@ -348,6 +348,69 @@ class SevenZip(unittest.TestCase):
             p = self.make_7z(d, {"x.ips": b"PATCHEOF", "readme.txt": b"hi"})
             found = m.patches_in_zip(p.read_bytes())
             self.assertEqual([n for n, _ in found], ["x.ips"])
+
+
+class Catalog(unittest.TestCase):
+    HEX = b":100000000C945D000C946E000C946E000C946E00A1\n" * 50
+    PREFIX = "https://raw.githubusercontent.com/eried/ArduboyCollection/master/"
+
+    def item(self, lic="MIT", url=None):
+        return {"title": "Ardu-EZ Button", "author": "someone", "license": lic,
+                "url": "https://community.arduboy.com/t/x/1", "sourceUrl": "https://github.com/someone/x",
+                "binaries": [{"filename": url or self.PREFIX + "App/x.hex", "device": "Arduboy"}]}
+
+    def test_permissive_licenses(self):
+        for ok in ("MIT", "BSD-3-Clause", "BSD 3-Clause License", "GPL-3.0", "GPLv3", "Apache-2.0", "CC0-1.0", "Unlicense", "CC-BY-4.0"):
+            self.assertTrue(m.is_permissive(ok), ok)
+        for bad in ("Proprietary", "Unspecified", "", None, "CC-BY-NC-SA-4.0", "All rights reserved"):
+            self.assertFalse(m.is_permissive(bad), bad)
+
+    def test_lookup_by_title_and_by_ra_rom_name(self):
+        items = [self.item()]
+        self.assertIs(m.catalog_lookup(items, "~Homebrew~ Ardu-EZ Button", []), items[0])
+        self.assertIs(m.catalog_lookup(items, "Something else", ["Ardu-EZ Button (World) (Program) (Erwin's Collection).hex"]), items[0])
+        self.assertIsNone(m.catalog_lookup(items, "Unrelated", []))
+
+    def test_fetch_keeps_only_hash_verified_files(self):
+        real = m.http_get
+        try:
+            m.http_get = lambda url, max_bytes, timeout=60: self.HEX
+            with tempfile.TemporaryDirectory() as d:
+                ents = [{"MD5": hashlib.md5(self.HEX).hexdigest(), "Name": "Ardu-EZ Button (World).hex"}]
+                path, why = m.fetch_homebrew_rom(self.item(), ents, "arduboy", Path(d))
+                self.assertEqual(why, "")
+                self.assertEqual(path.read_bytes(), self.HEX)
+                self.assertIn("license MIT", Path(str(path) + ".source.txt").read_text(encoding="utf-8"))
+                # RA registered a different build -> nothing is kept
+                other = [{"MD5": "0" * 32, "Name": "x.hex"}]
+                path2, why2 = m.fetch_homebrew_rom(self.item(), other, "arduboy", Path(d, "o"))
+                self.assertIsNone(path2)
+                self.assertIn("differs", why2)
+                self.assertFalse(Path(d, "o").exists())
+        finally:
+            m.http_get = real
+
+    def test_downloads_only_from_the_catalog_repository(self):
+        calls = []
+        real = m.http_get
+        try:
+            m.http_get = lambda url, max_bytes, timeout=60: calls.append(url) or self.HEX
+            with tempfile.TemporaryDirectory() as d:
+                path, why = m.fetch_homebrew_rom(self.item(url="https://evil.example.com/x.hex"),
+                                                 [{"MD5": hashlib.md5(self.HEX).hexdigest(), "Name": "n.hex"}], "arduboy", Path(d))
+                self.assertIsNone(path)
+                self.assertEqual(calls, [])
+        finally:
+            m.http_get = real
+
+    def test_report_links_author_page_and_license(self):
+        miss = {"id": 5, "title": "~Homebrew~ Ardu-EZ Button", "key": "arduboy",
+                "catalog": self.item("Proprietary")}
+        links = " ".join(m.find_links(miss, {}))
+        self.assertIn("https://github.com/someone/x", links)
+        self.assertIn("by someone", links)
+        self.assertIn("not an open license", links)
+        self.assertNotIn("arduboy.ried.cl", links)       # author page replaces the generic hub
 
 
 class Portability(unittest.TestCase):

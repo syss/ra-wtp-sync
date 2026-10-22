@@ -139,6 +139,20 @@ By default only small cartridge systems are selected. Choose differently with
 (case and punctuation are ignored; aliases like `sfc`/`snes`/`super-nintendo` are built in);
 map yours with `console_overrides`.
 
+### Homebrew catalogs (Arduboy)
+
+For Arduboy, the community catalog [Erwin's Arduboy Collection](https://arduboy.ried.cl/) (`repo.json`,
+which its maintainer offers as a data source for other tools) is used to put the **author's own page,
+author name and license** next to each missing game in the report. Games the catalog does not list get
+a GitHub search link.
+
+Optionally, `fetch_homebrew = true` also downloads the single `.hex` of a wanted, missing game from
+the collection's GitHub repository. Safeguards: off by default, only licenses that allow it (MIT, BSD,
+GPL, Apache, CC0, ... - never "Proprietary", "Unspecified" or non-commercial ones), only from the
+catalog's own repository, nothing bigger than 16 MB, a file is kept only if it matches the hash RA
+registered, and the author/license are recorded next to it (`*.source.txt`). Only what your list needs
+is fetched, once. Please credit and support the authors.
+
 ### Missing ROMs, links and patches
 
 Each run writes `missing-roms.txt` (in the state folder, or `report_file`):
