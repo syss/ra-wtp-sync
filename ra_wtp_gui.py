@@ -177,10 +177,12 @@ class State:
             msg += " (Note: the key looks unusual - they normally have 32 characters.)"
         return {"ok": ok, "message": msg}
 
-    def report(self) -> str:
+    def report(self, which: str = "missing") -> str:
         cfg = self.load()
         p = Path(cfg["report_file"] or Path(cfg["state_dir"]).expanduser() / "missing-roms.txt").expanduser()
-        return p.read_text(encoding="utf-8") if p.exists() else "(no report yet - run a dry run first)"
+        if which == "installed":
+            p = p.with_name("installed-roms.txt")
+        return p.read_text(encoding="utf-8") if p.exists() else "(nothing yet - run a preview first)"
 
 
 def make_handler(st: State, port: int):
@@ -226,7 +228,7 @@ def make_handler(st: State, port: int):
                 q = parse_qs(urlparse(self.path).query)
                 self._send(json.dumps(st.browse(q.get("path", [""])[0])).encode())
             elif path == "/api/report" and self._auth():
-                self._send(st.report().encode(), "text/plain")
+                self._send(st.report("installed" if "which=installed" in self.path else "missing").encode(), "text/plain")
             else:
                 self.send_error(404)
 
@@ -338,7 +340,7 @@ details.card summary{cursor:pointer}pre#schedcmd{max-height:220px}
 <div class="grid" id="namegrid"></div></div>
 
 <h2>4. Preview and run</h2><div class="card">
-<div class="bar"><button onclick="run(true)">Save &amp; preview (changes nothing)</button><button class="p" onclick="run(false)">Save &amp; run now</button><button onclick="report()">Show missing-ROMs list</button></div>
+<div class="bar"><button onclick="run(true)">Save &amp; preview (changes nothing)</button><button class="p" onclick="run(false)">Save &amp; run now</button><button onclick="report()">Show missing-ROMs list</button><button onclick="report('installed')">Show chosen versions</button></div>
 <pre id="log">Nothing started yet.</pre></div>
 
 <h2>Advanced <span class="hint">(optional - the defaults are fine)</span></h2>
@@ -407,7 +409,7 @@ function pickHere(){if(browsePath)$(browseTarget).value=browsePath;$("dlg").clos
 async function testLogin(){const m=$("loginmsg");m.className="hint";m.textContent="Checking…";
  const r=await (await api("/api/test",{method:"POST",body:JSON.stringify({username:$("username").value.trim(),api_key:$("apikey").value})})).json();
  m.className=r.ok?"ok":"bad";m.textContent=r.message}
-async function report(){$("log").textContent=await (await api("/api/report")).text()}
+async function report(w){$("log").textContent=await (await api("/api/report?which="+(w||"missing"))).text()}
 async function load(first){S=await (await api("/api/state")).json();const c=S.config;$("cfgpath").textContent=S.config_path;
  $("username").value=c.username;$("src").value=c.src;$("dest").value=c.dest;document.querySelector(`input[name=mode][value=${c.dest_mode==="merge"?"merge":"new"}]`).checked=true;$("saves").value=c.saves.join("\n");
  $("build").checked=c.build_patches;$("variants").checked=(c.build_variants||[]).length>0;$("started").checked=c.include_started;$("keystate").innerHTML=S.has_key?'<span class=ok>– saved ✓</span>':'<span>– not set</span>';

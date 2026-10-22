@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License along with
 # this program. If not, see <https://www.gnu.org/licenses/>.
 
-import hashlib, json, os, sys, tempfile, unittest, zipfile
+import hashlib, io, json, os, sys, tempfile, unittest, zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ra_wtp_sync as m
@@ -435,6 +435,74 @@ class Portability(unittest.TestCase):
             p = Path(d, "missing.txt")
             m.write_report(p, "u", [{"id": 1, "title": "Pok\u00e9mon \u30c6\u30b9\u30c8", "console": "Game Boy", "key": "gb", "reason": "x", "roms": [], "needs": []}], 0)
             self.assertIn("\u30c6\u30b9\u30c8", p.read_text(encoding="utf-8"))
+
+
+class Versions(unittest.TestCase):
+    URL = "https://github.com/RetroAchievements/RAPatches/raw/main/GBA/{}/1-Emerald.ips"
+    ENTS = [{"MD5": "a" * 32, "PatchUrl": None, "Name": "Pokemon - Emerald Version (USA, Europe).gba"},
+            {"MD5": "b" * 32, "PatchUrl": URL.format("Fix"), "Name": "Pokemon Emerald [32-bit RTC+TIMER RNG fix].gba"}]
+
+    def test_registered_fix_counts_as_qol_even_with_a_plain_name(self):
+        is_qol, text = m.ra_version(self.ENTS, {"b" * 32: ["/lib/emerald.gba"]}, "/lib/emerald.gba")
+        self.assertTrue(is_qol)
+        self.assertIn("RA Fix", text)
+        self.assertIn("RNG fix", text)
+
+    def test_base_rom_says_so_and_mentions_the_fix(self):
+        is_qol, text = m.ra_version(self.ENTS, {"a" * 32: ["/lib/emerald.gba"]}, "/lib/emerald.gba")
+        self.assertFalse(is_qol)
+        self.assertIn("RA base ROM", text)
+        self.assertIn("also registers: Fix", text)
+
+    def test_rank_prefers_ra_qol_hash_over_plain_name(self):
+        plain, qol = "/lib/Emerald.gba", "/lib/Emerald (other).gba"
+        key = lambda p: m.rank(p, set(), PREFS, p == qol)
+        self.assertEqual(min([plain, qol], key=key), qol)
+
+    def test_variants_built_by_default(self):
+        self.assertEqual([c.lower() for c in m.DEFAULTS["build_variants"]], ["fix", "improvement"])
+
+
+class VariantEndToEnd(unittest.TestCase):
+    ROM = bytes(range(256)) * 16
+
+    def test_fix_variant_is_built_chosen_and_labelled(self):
+        ips = b"PATCH" + (10).to_bytes(3, "big") + (3).to_bytes(2, "big") + b"abc" + b"EOF"
+        fixed = m.apply_ips(self.ROM, ips)
+        zbuf = io.BytesIO()
+        with zipfile.ZipFile(zbuf, "w") as z:
+            z.writestr("Game fix.ips", ips)
+        url = "https://github.com/RetroAchievements/RAPatches/raw/main/GB/Fix/1-Game.zip"
+        ents = [{"MD5": hashlib.md5(self.ROM).hexdigest(), "PatchUrl": None, "Name": "Game.gb"},
+                {"MD5": hashlib.md5(fixed).hexdigest(), "PatchUrl": url, "Name": "Game [RNG fix].gb"}]
+
+        def fake_api(endpoint, key, **kw):
+            if endpoint == "API_GetUserWantToPlayList.php":
+                return {"Results": [{"ID": 1, "Title": "Game", "ConsoleID": 4}], "Total": 1}
+            if endpoint == "API_GetGameHashes.php":
+                return {"Results": [{"MD5": e["MD5"], "Name": e["Name"], "PatchUrl": e["PatchUrl"]} for e in ents]}
+            raise RuntimeError(endpoint)
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            (root / "lib" / "gb").mkdir(parents=True)
+            (root / "lib" / "gb" / "Game.gb").write_bytes(self.ROM)
+            cfg = dict(m.DEFAULTS, username="u", src=str(root / "lib"), dest=str(root / "out"),
+                       state_dir=str(root / "state"), consoles=["gb"])
+            saved = m.api, m.fetch_patch_zip, os.environ.get("RA_API_KEY")
+            m.api, m.fetch_patch_zip, os.environ["RA_API_KEY"] = fake_api, (lambda u, c: zbuf.getvalue()), "x"
+            try:
+                m.sync(cfg, False)
+            finally:
+                m.api, m.fetch_patch_zip = saved[0], saved[1]
+                os.environ.pop("RA_API_KEY") if saved[2] is None else os.environ.update(RA_API_KEY=saved[2])
+            out = list((root / "out" / "gb").iterdir())
+            self.assertEqual(len(out), 1)
+            self.assertIn("[QoL fix]", out[0].name)
+            self.assertEqual(out[0].read_bytes(), fixed)
+            self.assertIn("RA Fix", (root / "state" / "installed-roms.txt").read_text(encoding="utf-8"))
+            manifest = json.loads((root / "state" / "manifest.json").read_text(encoding="utf-8"))
+            self.assertIn("RA Fix", manifest["1"]["version"])
 
 
 class MergeMode(unittest.TestCase):

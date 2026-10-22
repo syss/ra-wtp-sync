@@ -183,6 +183,15 @@ git clone --depth 1 https://github.com/eried/ArduboyCollection.git /path/to/libr
 ever downloaded by the tool itself. Its catalog (`repo.json`, offered by the maintainer as a data source) is
 only read to show the **author's page and license** next to a missing game in the report.
 
+### Which version was chosen
+
+Besides `missing-roms.txt`, every run writes `installed-roms.txt` (same folder): one entry per game with the
+file that was copied and the version RetroAchievements registers for it, e.g. `RA Fix: Pokemon Emerald [32-bit
+RTC+TIMER RNG fix]`, `RA base ROM (no fix or improvement applied) - RA also registers: Fix`, or *matched by title*
+for disc systems. The run log shows the same after each `ADD`, and the info is kept in the manifest.
+A plain ROM can still win over the fix when it already has a save file (rule order above), and a built fix
+is named `... [QoL fix] [RA <id>]`.
+
 ### Missing ROMs, links and patches
 
 Each run writes `missing-roms.txt` (in the state folder, or `report_file`):
@@ -201,9 +210,10 @@ Missing hacks and fixes are built from RA's official patches (RAPatches repo; IP
 .7z) using base ROMs from your library, and verified against RA's hash before they are used.
 
 **Variants of games you own.** RA also registers patched versions of some games (fixes,
-improvements, translations). With `build_variants = ["Fix", "Improvement"]` those are built from your
+improvements, translations). By default (`build_variants = ["Fix", "Improvement"]`; `[]` turns it off) those are built from your
 own ROM too and preferred over the plain one (rule order: save file, QoL, language, region,
-revision), e.g. Pokémon Emerald's *32-bit RTC+TIMER RNG fix*. Only patches RA registered keep
+revision), e.g. Pokémon Emerald's *32-bit RTC+TIMER RNG fix*. A ROM already in your library whose hash RA
+registers as a fix or improvement counts as the QoL version too, whatever its file name. Only patches RA registered keep
 achievements working: any other patch changes the hash and RA will not recognise the game.
 
 ## Limitations
