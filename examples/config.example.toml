@@ -60,6 +60,7 @@ build_patches = true
 # preferred over the plain ROM unless the plain ROM already has a save file.
 # Categories seen on RA: Fix, Improvement, Cosmetic, Translation. Only fixes and improvements keep
 # the game "vanilla enough" to be worth preferring.
+# Default: on. Set to [] to always use the plain ROM.
 # build_variants = ["Fix", "Improvement"]
 
 # Free downloads from the authors for homebrew: sources.json next to the script is read

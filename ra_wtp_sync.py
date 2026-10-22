@@ -164,7 +164,7 @@ DEFAULTS = {
     "patched_dir": "",       # where built ROMs are kept (default: <state_dir>/patched)
     # RA also registers patched versions of games you may own (fixes, improvements, translations...).
     # List the patch categories to build for games already in your library, e.g. ["Fix", "Improvement"].
-    "build_variants": [],
+    "build_variants": ["Fix", "Improvement"],   # official RA fixes/improvements of games you own; [] = off
     "sources_file": "",      # extra JSON with free-download links (default: sources.json next to the script)
     "preferences": {
         # Earlier entries win. Choose from: save, qol, language, region, revision
@@ -649,12 +649,16 @@ def match_rank(name: str, wanted: list[str], table: dict[str, str]) -> int:
     return len(wanted) + 1
 
 
-def rank(path: str, saved: set[str], prefs: dict) -> tuple:
-    """Sort key (lower = preferred) following prefs['order']."""
+QOL_CATEGORIES = ("fix", "improvement")   # RAPatches categories that count as the quality-of-life version
+
+
+def rank(path: str, saved: set[str], prefs: dict, qol: bool = False) -> tuple:
+    """Sort key (lower = preferred) following prefs['order']. `qol`: RetroAchievements itself
+    registers this file's hash as a fix/improvement version (file names alone can not tell)."""
     n = os.path.basename(path)
     crit = {
         "save": not (stem(n) in saved or stem(stem(n)) in saved),
-        "qol": not QOL_RE.search(n),
+        "qol": not (qol or QOL_RE.search(n)),
         "language": match_rank(n, [x.lower() for x in prefs["languages"]], LANGUAGES),
         "region": match_rank(n, [x.lower() for x in prefs["regions"]], REGIONS),
         "revision": -revision(n),
@@ -919,6 +923,23 @@ def patch_category(url: str | None) -> str:
     return urllib.parse.unquote(m.group(1)) if m else ""
 
 
+def ra_version(ents: list[dict], md5_paths: dict[str, list[str]], path: str) -> tuple[bool, str]:
+    """(is quality-of-life version, text) for a library file, from what RetroAchievements registers
+    for its hash: 'RA base ROM', 'RA Fix: <name>', ... Also notes official fixes that were not used."""
+    mine = next((e for e in ents if path in md5_paths.get(e["MD5"], [])), None)
+    if mine is None:
+        return False, "matched by title (RA does not register a version for it)"
+    cat = patch_category(mine.get("PatchUrl"))
+    is_qol = cat.lower() in QOL_CATEGORIES
+    if is_qol:
+        return True, f"RA {cat}: {stem(mine.get('Name') or '')}".rstrip(": ")
+    text = f"RA {cat}: {stem(mine.get('Name') or '')}" if cat else "RA base ROM (no fix or improvement applied)"
+    others = sorted({c for e in ents if (c := patch_category(e.get("PatchUrl"))).lower() in QOL_CATEGORIES})
+    if others:
+        text += f" - RA also registers: {', '.join(others)}"
+    return False, text
+
+
 def load_sources(cfg: dict) -> dict[str, dict]:
     """RA game id -> {'url', 'note'}: free downloads from the authors (sources.json + optional own file)."""
     out: dict[str, dict] = {}
@@ -1042,6 +1063,15 @@ def find_links(m: dict, sources: dict) -> list[str]:
     return links
 
 
+def write_installed(path: Path, user: str, rows: list[tuple[str, str, str, str]]) -> None:
+    """Which version of each wanted game was chosen, as RetroAchievements classifies it."""
+    lines = [f"# ROMs chosen for {user}'s list, with the version RetroAchievements registers for them",
+             f"# {time.strftime('%Y-%m-%d %H:%M:%S')}  -  {len(rows)} games", ""]
+    lines += [f"{t}  [{n}]\n    {f}\n    {v}" for t, n, f, v in sorted(rows, key=lambda r: (r[1], r[0]))]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_report(path: Path, user: str, missing: list[dict], matched: int, sources: dict | None = None) -> None:
     """Human readable list of wanted games that could not be provided: first the ROMs to look for
     (name + MD5 as registered on RetroAchievements), then each game with its reason and links."""
@@ -1136,7 +1166,7 @@ def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
 
     variant_cats = {c.lower() for c in cfg["build_variants"]}
     indexes: dict[int, dict] = {}
-    plan: dict[str, tuple[str, str, str]] = {}
+    plan: dict[str, tuple[str, str, str, str]] = {}
     missing: list[dict] = []
 
     def library_paths(cid) -> list[str]:
@@ -1222,9 +1252,11 @@ def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
             missing.append({"id": gid, "title": title, "console": spec["label"], "key": name, "reason": reason,
                             "roms": [(e.get("Name"), e["MD5"]) for e in ents], "needs": needs, "catalog": catalog})
             continue
-        plan[str(gid)] = (title, name, min(cands, key=lambda p: rank(p, saved, cfg["preferences"])))
+        info = {p: ra_version(ents, indexes[cid], p) for p in cands} if ents else {}
+        best = min(cands, key=lambda p: rank(p, saved, cfg["preferences"], info.get(p, (False,))[0]))
+        plan[str(gid)] = (title, name, best, info.get(best, (False, "matched by title"))[1])
 
-    for gid, (title, name, p) in plan.items():
+    for gid, (title, name, p, version) in plan.items():
         rel = f"{dest_folder(dest, name, table[name]['dirs'], merge)}/{os.path.basename(p)}"
         tgt = dest / rel
         old = manifest.get(gid)
@@ -1236,12 +1268,12 @@ def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
             # untracked, so it is also never deleted
             log("KEEP", rel, "- already there" if tgt.exists() else "- inside the library")
             continue
-        log("ADD", rel)
+        log("ADD", rel, f"[{version}]")
         if not dry_run:
             copy_atomic(p, tgt)
             if old and old["file"] != rel:
                 safe_remove(dest, old["file"], prune=not merge)
-        manifest[gid] = {"title": title, "file": rel}
+        manifest[gid] = {"title": title, "file": rel, "version": version}
 
     for gid in [g for g in manifest if g not in plan and int(g) not in wanted]:
         log("DEL", manifest[gid]["file"], "-", manifest[gid]["title"])
@@ -1251,6 +1283,8 @@ def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
 
     report = Path(cfg["report_file"] or state / "missing-roms.txt").expanduser()
     write_report(report, cfg["username"], missing, len(plan), sources)
+    write_installed(report.with_name("installed-roms.txt"), cfg["username"],
+                    [(t, n, os.path.basename(p), v) for t, n, p, v in plan.values()])
     if not dry_run:
         fail_path.write_text(json.dumps(failed), encoding="utf-8")
         mf_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")

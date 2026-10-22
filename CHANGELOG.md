@@ -3,6 +3,9 @@
 
 ## Unreleased
 
+* Official RA Fix/Improvement versions (e.g. Pokémon Emerald's RNG fix) are now built and preferred by default (`build_variants`); a library ROM whose hash RA registers as a fix counts as the QoL version.
+* New `installed-roms.txt` and log/manifest info: which RA version of each game was chosen (GUI: *Show chosen versions*).
+
 * New `dest_mode = "merge"` (`--merge`, GUI option): add games straight into an existing ROM folder, reusing its system folders and never overwriting or deleting files of your own.
 
 * GUI is now a guided four-step page: API key help with an example and a Test login button, folder pickers, an Advanced section for the rest.
