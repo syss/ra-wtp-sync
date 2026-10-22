@@ -1059,11 +1059,18 @@ def sync(cfg: dict, dry_run: bool) -> int:
                 reason = "not in the library, and RA publishes no patch for it"
             # RA-registered variants (fixes, improvements, ...) of a game that is in the library
             if cands and variant_cats:
+                # one variant per category (best by language/region/revision), not every registered one
+                groups: dict[str, list[dict]] = {}
                 for e in ents:
                     cat = patch_category(e.get("PatchUrl"))
+                    if cat.lower() in variant_cats:
+                        groups.setdefault(cat, []).append(e)
+                for cat, group in groups.items():
+                    if any(e["MD5"] in indexes[cid] for e in group):
+                        continue                                  # already built / present
+                    e = min(group, key=lambda x: rank(x.get("Name") or "", saved, cfg["preferences"]))
                     fkey = f"{gid}:{e['MD5'][:8]}"
-                    if (cat.lower() not in variant_cats or e["MD5"] in indexes[cid]
-                            or time.time() - failed.get(fkey, {}).get("t", 0) < cfg["hash_cache_days"] * 86400):
+                    if time.time() - failed.get(fkey, {}).get("t", 0) < cfg["hash_cache_days"] * 86400:
                         continue
                     if dry_run:
                         log(f"WOULD BUILD {cat} variant:", e.get("Name"))
