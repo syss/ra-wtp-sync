@@ -1072,6 +1072,16 @@ def write_report(path: Path, user: str, missing: list[dict], matched: int, sourc
 
 # --------------------------------------------------------------------------- main
 def sync(cfg: dict, dry_run: bool) -> int:
+    """Run one sync; the lock file and the hash cache are closed again however it ends."""
+    cleanup: list = []
+    try:
+        return _sync(cfg, dry_run, cleanup)
+    finally:
+        for close in reversed(cleanup):
+            close()
+
+
+def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
     if not cfg["username"]:
         sys.exit("no RetroAchievements username (config 'username', --username or $RA_USER)")
     if not cfg["src"] or not cfg["dest"]:
@@ -1090,6 +1100,7 @@ def sync(cfg: dict, dry_run: bool) -> int:
     state = Path(cfg["state_dir"]).expanduser()
     state.mkdir(parents=True, exist_ok=True)
     lock = FileLock(state / "lock")
+    cleanup.append(lock.release)
     if not lock.acquire():
         sys.exit("another run is in progress")
 
@@ -1110,6 +1121,7 @@ def sync(cfg: dict, dry_run: bool) -> int:
     if cfg["saves"]:
         log(f"{len(saved)} save files found for ROM preference")
     db = open_db(state)
+    cleanup.append(db.close)
     patched_dir = Path(cfg["patched_dir"] or state / "patched").expanduser()
     fail_path = state / "patch-failed.json"
     failed: dict = json.loads(fail_path.read_text(encoding="utf-8")) if fail_path.exists() else {}
