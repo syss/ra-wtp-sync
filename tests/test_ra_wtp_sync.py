@@ -213,8 +213,14 @@ class Portability(unittest.TestCase):
     def test_lock_is_exclusive(self):
         with tempfile.TemporaryDirectory() as d:
             a, b = m.FileLock(Path(d, "lock")), m.FileLock(Path(d, "lock"))
-            self.assertTrue(a.acquire())
-            self.assertFalse(b.acquire())
+            try:
+                self.assertTrue(a.acquire())
+                self.assertFalse(b.acquire())
+                a.release()
+                self.assertTrue(b.acquire())   # free again after release
+            finally:
+                a.release()
+                b.release()
 
     def test_default_dirs_are_absolute_and_per_user(self):
         for p in (m.CONFIG_DIR, m.STATE_DIR):

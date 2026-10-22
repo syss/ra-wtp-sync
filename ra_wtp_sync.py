@@ -210,8 +210,14 @@ class FileLock:
                 import fcntl
                 fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            self.release()
             return False
         return True
+
+    def release(self) -> None:
+        if self.f:
+            self.f.close()   # closing drops the lock on every platform
+            self.f = None
 
 
 def log(*a):
