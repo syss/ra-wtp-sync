@@ -1,0 +1,11 @@
+{
+  "_comment": "RA game id -> where to get a free ROM from its author. Add your own entries (same format) or point 'sources_file' in config.toml to another file. Only official/author pages please.",
+  "17053": {"url": "https://small.itch.io/deep-forest", "note": "free / pay-what-you-want, DeepForest_GOLDv1_1.gb"},
+  "18987": {"url": "https://seanss.itch.io/persona-4-gb-demo", "note": "free, rom.zip contains game.gb"},
+  "22589": {"url": "https://allalonegamez.itch.io/a-20-second", "note": "RA set is for the DX version; author keeps all rights"},
+  "31934": {"url": "https://wilbosworld.itch.io/combo-fishing", "note": "free, ComboFishing.gb"},
+  "7297":  {"url": "https://robert-doman.itch.io/office-combat", "note": "paid: the author asks for at least $2"},
+  "31200": {"url": "https://mico27.itch.io/super-mario-bros-mini", "note": "free; source code is on GitHub"},
+  "19708": {"url": "https://syndakai.itch.io/hamburgers-in-space", "note": "Pokemon Mini, itch.io page of the author"},
+  "15726": {"url": "https://wiki-next.recalbox.com/en/emulators/handhelds/pokemini", "note": "Galactix ships with Recalbox's Pokemon Mini ROM folder; no standalone page found"}
+}

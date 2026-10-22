@@ -41,7 +41,7 @@ LANGS = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it":
 REGIONS = {"europe": "Europe", "usa": "USA", "japan": "Japan", "world": "World"}
 SIMPLE_KEYS = ("username", "api_key_file", "src", "dest", "state_dir", "saves", "consoles", "exclude_consoles",
                "include_started", "build_patches", "max_rom_mb", "hash_cache_days", "min_list_fraction",
-               "patched_dir", "report_file")
+               "patched_dir", "report_file", "build_variants", "sources_file")
 
 
 # ----------------------------------------------------------------------------- TOML writing
@@ -278,6 +278,7 @@ pre{background:#0d1117;color:#d1d5db;padding:12px;border-radius:8px;max-height:3
 
 <h2>Options</h2><div class="card">
 <label><input type="checkbox" id="build"> Build missing hacks from RetroAchievements' official patches (needs the base ROM in your library)</label><br>
+<label><input type="checkbox" id="variants"> Also build RetroAchievements' official <b>Fix / Improvement</b> versions of games I own (e.g. Pokémon Emerald RNG fix); they are preferred over the plain ROM unless the plain one already has a save</label><br>
 <label><input type="checkbox" id="started"> Also keep games I started but have not beaten yet</label></div>
 
 <h2>Run</h2><div class="card">
@@ -303,7 +304,7 @@ function form(){const L=[...$("langs").querySelectorAll("input")].map((e,i)=>e.c
  const all=S.consoles.map(x=>x.key);const allSel=all.every(k=>sel_.has(k));
  return {api_key:$("apikey").value,config:{username:$("username").value.trim(),src:$("src").value.trim(),dest:$("dest").value.trim(),
   saves:$("saves").value.split("\n").map(s=>s.trim()).filter(Boolean),consoles:allSel?["all"]:all.filter(k=>sel_.has(k)),exclude_consoles:[],
-  build_patches:$("build").checked,include_started:$("started").checked,preferences:{languages:L,regions:R}}}}
+  build_patches:$("build").checked,build_variants:$("variants").checked?["Fix","Improvement"]:[],include_started:$("started").checked,preferences:{languages:L,regions:R}}}}
 async function save(quiet){const f=form();if(!f.config.username||!f.config.src||!f.config.dest){$("msg").textContent="username, library and output folder are required";throw 0}
  await api("/api/save",{method:"POST",body:JSON.stringify(f)});$("apikey").value="";$("msg").textContent=quiet?"":"Saved ✓";if(!quiet)load(false)}
 let since=0,timer;
@@ -314,7 +315,7 @@ async function poll(){const r=await (await api("/api/log?since="+since)).json();
 async function report(){$("log").textContent=await (await api("/api/report")).text()}
 async function load(first){S=await (await api("/api/state")).json();const c=S.config;$("cfgpath").textContent=S.config_path;
  $("username").value=c.username;$("src").value=c.src;$("dest").value=c.dest;$("saves").value=c.saves.join("\n");
- $("build").checked=c.build_patches;$("started").checked=c.include_started;$("keystate").innerHTML=S.has_key?'<span class=ok>– saved ✓</span>':'<span>– not set</span>';
+ $("build").checked=c.build_patches;$("variants").checked=(c.build_variants||[]).length>0;$("started").checked=c.include_started;$("keystate").innerHTML=S.has_key?'<span class=ok>– saved ✓</span>':'<span>– not set</span>';
  const keys=S.consoles.map(x=>x.key);const want=c.consoles.map(String);
  sel_=new Set(want.includes("all")?keys:keys.filter(k=>want.includes(k)||want.includes(String(S.consoles.find(x=>x.key==k).id))));
  for(const x of c.exclude_consoles||[])sel_.delete(String(x));

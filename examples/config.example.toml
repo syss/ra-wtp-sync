@@ -48,6 +48,18 @@ exclude_consoles = []
 build_patches = true
 # patched_dir = "/path/to/patched"            # default: <state_dir>/patched
 
+# RetroAchievements also registers patched versions of some games (fixes, improvements,
+# translations, ...). Name the categories to build for games already in your library; they are
+# built from your own ROM, verified against RA's hash, and - because they are named "[QoL ...]" -
+# preferred over the plain ROM unless the plain ROM already has a save file.
+# Categories seen on RA: Fix, Improvement, Cosmetic, Translation. Only fixes and improvements keep
+# the game "vanilla enough" to be worth preferring.
+# build_variants = ["Fix", "Improvement"]
+
+# Free downloads from the authors for homebrew: sources.json next to the script is read
+# automatically; add your own file here (same format) if you like.
+# sources_file = "/path/to/my-sources.json"
+
 # Skip ROM files larger than this (MB) while hashing.
 max_rom_mb = 200
 

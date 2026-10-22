@@ -204,14 +204,43 @@ class Hashing2(unittest.TestCase):
 
 
 class Report(unittest.TestCase):
-    def test_report_lists_reason_and_link(self):
+    def test_report_has_rom_list_reasons_links_and_sources(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d, "r.txt")
-            m.write_report(p, "me", [(42, "Some Hack", "Nintendo 64", "base ROM missing in the library")], 3)
-            txt = p.read_text()
-            self.assertIn("[Nintendo 64] Some Hack", txt)
-            self.assertIn("base ROM missing", txt)
+            miss = [
+                {"id": 42, "title": "~Hack~ Some Hack", "console": "Nintendo 64", "key": "n64",
+                 "reason": "base ROM missing in the library", "roms": [("Some Hack.z64", "a" * 32)],
+                 "needs": ["Super Mario 64 (USA).z64 md5 20b854b2"]},
+                {"id": 7, "title": "~Homebrew~ Tiny Game", "console": "Pokemon Mini", "key": "pokemini",
+                 "reason": "not in the library", "roms": [], "needs": []},
+                {"id": 9, "title": "~Homebrew~ Known Game", "console": "Game Boy", "key": "gb",
+                 "reason": "not in the library", "roms": [("Known.gb", "b" * 32)], "needs": []},
+            ]
+            m.write_report(p, "me", miss, 3, {"9": {"url": "https://example.itch.io/known", "note": "free"}})
+            txt = p.read_text(encoding="utf-8")
+            top = txt.split("## Details")[0]
+            self.assertIn("a" * 32 + "  Some Hack.z64", top)            # name + hash list comes first
+            self.assertIn("Base ROMs the official patches need", top)
+            self.assertIn("Super Mario 64 (USA).z64", top)
             self.assertIn("retroachievements.org/game/42", txt)
+            self.assertIn("https://itch.io/search?q=Tiny%20Game", txt)   # homebrew without known source
+            self.assertIn("pokemon-mini.net", txt)
+            self.assertIn("https://example.itch.io/known", txt)          # known author page wins
+            self.assertNotIn("itch.io/search?q=Known", txt)
+
+    def test_shipped_sources_file_is_valid(self):
+        import json
+        data = json.loads((Path(__file__).resolve().parent.parent / "sources.json").read_text(encoding="utf-8"))
+        ids = [k for k in data if k.isdigit()]
+        self.assertGreaterEqual(len(ids), 5)
+        for k in ids:
+            self.assertTrue(data[k]["url"].startswith("https://"))
+
+    def test_patch_category(self):
+        self.assertEqual(m.patch_category("https://github.com/RetroAchievements/RAPatches/raw/main/GBA/Fix/668-x.zip"), "Fix")
+        self.assertEqual(m.patch_category("https://github.com/RetroAchievements/RAPatches/raw/refs/heads/main/NES/Improvement/2021-x.zip"), "Improvement")
+        self.assertEqual(m.patch_category(None), "")
+
 
 
 class N64Bases(unittest.TestCase):
@@ -231,7 +260,7 @@ class N64Bases(unittest.TestCase):
             lib = Path(d, "Super Mario 64 (USA).n64"); lib.write_bytes(bytes(v64))   # byte-swapped dump
             ents = [{"PatchUrl": m.PATCH_HOST + "N64/Hacks/Super%20Mario%2064/1-hack.zip", "MD5": "x"}]
             want = {hashlib.md5(target).hexdigest()}
-            data, ext, base, why = m.build_patched(ents, want, "n64", [str(lib)], 10**7, cache)
+            data, ext, base, why, needs = m.build_patched(ents, want, "n64", [str(lib)], 10**7, cache)
             self.assertEqual(data, target)
             self.assertEqual(ext, ".z64")
             self.assertEqual(why, "")
@@ -259,7 +288,7 @@ class N64Bases(unittest.TestCase):
                 p = Path(d, f"decoy{i}.gb"); p.write_bytes(os.urandom(4096)); libs.append(str(p))
             real = Path(d, "base.gb"); real.write_bytes(base); libs.append(str(real))
             ents = [{"PatchUrl": m.PATCH_HOST + "GB/Hacks/3-multi.zip", "MD5": "x"}]
-            data, _, _, why = m.build_patched(ents, {hashlib.md5(want).hexdigest()}, "plain", libs, 10**7, cache)
+            data, _, _, why, _ = m.build_patched(ents, {hashlib.md5(want).hexdigest()}, "plain", libs, 10**7, cache)
             self.assertEqual(data, want, why)
 
     def test_reason_when_base_missing(self):
@@ -269,10 +298,12 @@ class N64Bases(unittest.TestCase):
                 z.writestr("x.ips", b"PATCHEOF")
                 z.writestr("readme.txt", "Use with: Some Game (USA).sfc")
             ents = [{"PatchUrl": m.PATCH_HOST + "SNES/Hacks/2-x.zip", "MD5": "x"}]
-            data, _, _, why = m.build_patched(ents, {"0" * 32}, "snes", [], 10**7, cache)
+            data, _, _, why, needs = m.build_patched(ents, {"0" * 32}, "snes", [], 10**7, cache)
             self.assertIsNone(data)
             self.assertIn("base ROM missing", why)
             self.assertIn("Some Game (USA).sfc", why)
+            self.assertEqual(len(needs), 1)
+            self.assertIn("Some Game (USA).sfc", needs[0])
 
 
 @unittest.skipUnless(m.archive_tool() or __import__("importlib").util.find_spec("py7zr"), "no 7z extractor installed")
@@ -337,7 +368,7 @@ class Portability(unittest.TestCase):
     def test_utf8_roundtrip_of_state_files(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d, "missing.txt")
-            m.write_report(p, "u", [(1, "Pok\u00e9mon \u30c6\u30b9\u30c8", "Game Boy", "x")], 0)
+            m.write_report(p, "u", [{"id": 1, "title": "Pok\u00e9mon \u30c6\u30b9\u30c8", "console": "Game Boy", "key": "gb", "reason": "x", "roms": [], "needs": []}], 0)
             self.assertIn("\u30c6\u30b9\u30c8", p.read_text(encoding="utf-8"))
 
 

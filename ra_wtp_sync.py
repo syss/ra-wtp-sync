@@ -160,6 +160,10 @@ DEFAULTS = {
     "min_list_fraction": 0.5,
     "build_patches": True,   # build missing hacks from RA's official patches
     "patched_dir": "",       # where built ROMs are kept (default: <state_dir>/patched)
+    # RA also registers patched versions of games you may own (fixes, improvements, translations...).
+    # List the patch categories to build for games already in your library, e.g. ["Fix", "Improvement"].
+    "build_variants": [],
+    "sources_file": "",      # extra JSON with free-download links (default: sources.json next to the script)
     "preferences": {
         # Earlier entries win. Choose from: save, qol, language, region, revision
         "order": ["save", "qol", "language", "region", "revision"],
@@ -817,8 +821,10 @@ def readme_hint(data: bytes) -> str:
 def build_patched(entries: list[dict], wanted_md5: set[str], style: str, paths: list[str],
                   max_bytes: int, cache: Path, max_tries: int = 60):
     """Apply the official RA patch to a base ROM from the library.
-    Returns (rom bytes, extension, base path, "") on success, else (None, None, None, reason)."""
+    Returns (rom bytes, extension, base path, "", []) on success,
+    else (None, None, None, reason, [base ROMs the patches need])."""
     reasons: list[str] = []
+    needs: list[str] = []
     for e in entries:
         url = e.get("PatchUrl")
         if not url:
@@ -860,15 +866,35 @@ def build_patched(entries: list[dict], wanted_md5: set[str], style: str, paths: 
                             continue
                         if md5s(res, style) & wanted_md5:
                             ext = ".z64" if style == "n64" else (os.path.splitext(bname)[1] or ".bin")
-                            return res, ext, cand, ""
+                            return res, ext, cand, "", []
                         # BPS/UPS check the base's CRC, so a patch that applied has the right base:
                         # this patch is simply a different version than the one RA registered.
                         if fn is not apply_ips:
                             verified_base = True
-        need = readme_hint(zdata)
-        reasons.append("base ROM missing in the library" + (f" - patch needs: {need}" if need else
-                       f" - patch needs: {e.get('Name') or pname_url}"))
-    return None, None, None, "; ".join(dict.fromkeys(reasons)) or "no patch published"
+        need = readme_hint(zdata) or str(e.get("Name") or pname_url)
+        needs.append(need)
+        reasons.append(f"base ROM missing in the library - patch needs: {need}")
+    return None, None, None, "; ".join(dict.fromkeys(reasons)) or "no patch published", list(dict.fromkeys(needs))
+
+
+def patch_category(url: str | None) -> str:
+    """'Fix', 'Improvement', 'Hacks', ... from a RAPatches URL (<Console>/<Category>/...)."""
+    m = re.search(r"/RAPatches/raw/(?:refs/heads/)?main/[^/]+/([^/]+)/", url or "")
+    return urllib.parse.unquote(m.group(1)) if m else ""
+
+
+def load_sources(cfg: dict) -> dict[str, dict]:
+    """RA game id -> {'url', 'note'}: free downloads from the authors (sources.json + optional own file)."""
+    out: dict[str, dict] = {}
+    for p in (Path(__file__).resolve().parent / "sources.json", Path(cfg.get("sources_file") or "").expanduser()):
+        if p.is_file():
+            try:
+                out.update({k: v for k, v in json.loads(p.read_text(encoding="utf-8")).items()
+                            if k.isdigit() and isinstance(v, dict)})
+            except ValueError:
+                log("  ignoring unreadable sources file", p)
+    return out
+
 
 
 # --------------------------------------------------------------------------- file ops
@@ -893,13 +919,44 @@ def copy_atomic(src: str, tgt: Path) -> None:
     os.replace(tmp, tgt)
 
 
-def write_report(path: Path, user: str, missing: list, matched: int) -> None:
-    """Human readable list of wanted games that could not be provided, with the reason."""
+def find_links(m: dict, sources: dict) -> list[str]:
+    """Where to look for a missing ROM: the author's page if known, else sensible search pages."""
+    src = sources.get(str(m["id"]))
+    if src:
+        return [src["url"] + (f"   ({src['note']})" if src.get("note") else "")]
+    links = []
+    clean = re.sub(r"\[.*?\]", "", re.sub(r"^(~[^~]*~\s*)+", "", m["title"])).strip()
+    if re.match(r"~(Homebrew|Demo)~", m["title"]):
+        links.append("https://itch.io/search?q=" + urllib.parse.quote(clean))
+    if m["key"] == "pokemini":
+        links.append("https://pokemon-mini.net/   (community hub with Pokemon Mini homebrew downloads)")
+    return links
+
+
+def write_report(path: Path, user: str, missing: list[dict], matched: int, sources: dict | None = None) -> None:
+    """Human readable list of wanted games that could not be provided: first the ROMs to look for
+    (name + MD5 as registered on RetroAchievements), then each game with its reason and links."""
+    sources = sources or {}
+    ordered = sorted(missing, key=lambda m: (m["console"], m["title"]))
     lines = [f"# Games on {user}'s RetroAchievements list that could not be provided",
-             f"# {time.strftime('%Y-%m-%d %H:%M:%S')}  -  {matched} provided, {len(missing)} missing", ""]
-    for gid, title, label, reason in sorted(missing, key=lambda m: (m[2], m[1])):
-        lines += [f"[{label}] {title}", f"    why:  {reason}",
-                  f"    link: https://retroachievements.org/game/{gid}", ""]
+             f"# {time.strftime('%Y-%m-%d %H:%M:%S')}  -  {matched} provided, {len(missing)} missing", "",
+             "## ROMs to look for (name and MD5 as registered on RetroAchievements)", ""]
+    for m in ordered:
+        if m["roms"]:
+            for name, md5 in m["roms"][:4]:
+                lines.append(f"{md5}  {name}   [{m['console']}] {m['title']}")
+        else:
+            lines.append(f"{'-' * 32}  (any dump; matched by title)   [{m['console']}] {m['title']}")
+    needs = {n: m["title"] for m in ordered for n in m["needs"]}
+    if needs:
+        lines += ["", "## Base ROMs the official patches need", ""]
+        lines += [f"- {n}   (for: {t})" for n, t in needs.items()]
+    lines += ["", "## Details", ""]
+    for m in ordered:
+        lines += [f"[{m['console']}] {m['title']}", f"    why:  {m['reason']}",
+                  f"    link: https://retroachievements.org/game/{m['id']}"]
+        lines += [f"    get:  {link}" for link in find_links(m, sources)]
+        lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -946,12 +1003,26 @@ def sync(cfg: dict, dry_run: bool) -> int:
     fail_path = state / "patch-failed.json"
     failed: dict = json.loads(fail_path.read_text(encoding="utf-8")) if fail_path.exists() else {}
     failed = {k: v for k, v in failed.items() if isinstance(v, dict)}   # drop pre-1.0 float entries
+    sources = load_sources(cfg)
+    variant_cats = {c.lower() for c in cfg["build_variants"]}
     indexes: dict[int, dict] = {}
     plan: dict[str, tuple[str, str, str]] = {}
-    missing: list[tuple[int, str, str, str]] = []   # (id, title, console, reason)
+    missing: list[dict] = []
+
+    def library_paths(cid) -> list[str]:
+        paths = [p for lst in indexes[cid].values() for p in lst]
+        return list(dict.fromkeys(p for p in paths if not p.startswith(str(patched_dir))))
+
+    def store(name, label, ext, data) -> Path:
+        safe = re.sub(r'[\\/:*?"<>|]+', " -", label).strip()
+        out = patched_dir / name / f"{safe}{ext}"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+        return out
+
     for gid, (title, cid) in sorted(wanted.items()):
         name, spec = by_id[cid], table[by_id[cid]]
-        reason = "not in the library"
+        reason, ents, needs = "not in the library", [], []
         if spec["hash"] == "name":                  # discs etc.: match by title
             if cid not in indexes:
                 log("indexing", name, "(by title)")
@@ -965,32 +1036,52 @@ def sync(cfg: dict, dry_run: bool) -> int:
                 indexes[cid] = index_console(db, src, spec, max_bytes, [patched_dir / name])
             cands = {p for h in hs for p in indexes[cid].get(h, [])}
             if not cands and cfg["build_patches"] and any(e["PatchUrl"] for e in ents):
-                if time.time() - failed.get(str(gid), {}).get("t", 0) < cfg["hash_cache_days"] * 86400:
-                    reason = failed[str(gid)]["why"] + " (retrying later)"
+                old = failed.get(str(gid), {})
+                if time.time() - old.get("t", 0) < cfg["hash_cache_days"] * 86400:
+                    reason, needs = old["why"] + " (retrying later)", old.get("needs", [])
                 elif dry_run:
                     reason = "an official patch exists (not tried in a dry run)"
                     log("WOULD BUILD from patch:", title)
                 else:
                     log("BUILD", title)
-                    paths = [p for lst in indexes[cid].values() for p in lst]
-                    paths = list(dict.fromkeys(p for p in paths if not p.startswith(str(patched_dir))))
-                    data, ext, base, why = build_patched(ents, hs, spec["hash"], paths, max_bytes, state / "patch-cache")
+                    data, ext, base, why, needs = build_patched(
+                        ents, hs, spec["hash"], library_paths(cid), max_bytes, state / "patch-cache")
                     if data:
-                        safe = re.sub(r'[\\/:*?"<>|]+', " -", title).strip()
-                        out = patched_dir / name / f"{safe} [RA {gid}]{ext}"
-                        out.parent.mkdir(parents=True, exist_ok=True)
-                        out.write_bytes(data)
+                        out = store(name, f"{title} [RA {gid}]", ext, data)
                         log(f"  built {out.name} from {os.path.basename(base)}")
                         cands = {str(out)}
                         indexes[cid].setdefault(next(iter(hs & md5s(data, spec["hash"]))), []).append(str(out))
                     else:
                         log("  cannot build:", why)
                         reason = why
-                        failed[str(gid)] = {"t": time.time(), "why": why}
+                        failed[str(gid)] = {"t": time.time(), "why": why, "needs": needs}
             elif not cands and not any(e["PatchUrl"] for e in ents):
                 reason = "not in the library, and RA publishes no patch for it"
+            # RA-registered variants (fixes, improvements, ...) of a game that is in the library
+            if cands and variant_cats:
+                for e in ents:
+                    cat = patch_category(e.get("PatchUrl"))
+                    fkey = f"{gid}:{e['MD5'][:8]}"
+                    if (cat.lower() not in variant_cats or e["MD5"] in indexes[cid]
+                            or time.time() - failed.get(fkey, {}).get("t", 0) < cfg["hash_cache_days"] * 86400):
+                        continue
+                    if dry_run:
+                        log(f"WOULD BUILD {cat} variant:", e.get("Name"))
+                        continue
+                    data, ext, base, why, _ = build_patched([e], {e["MD5"]}, spec["hash"], library_paths(cid),
+                                                            max_bytes, state / "patch-cache")
+                    if data:
+                        label = f"{stem(e.get('Name') or title)} [QoL {cat.lower()}] [RA {gid}]"
+                        out = store(name, label, ext, data)
+                        log(f"  built {cat} variant {out.name}")
+                        cands.add(str(out))
+                        indexes[cid][e["MD5"]] = [str(out)]
+                    else:
+                        log(f"  {cat} variant not built:", why)
+                        failed[fkey] = {"t": time.time(), "why": why}
         if not cands:
-            missing.append((gid, title, spec["label"], reason))
+            missing.append({"id": gid, "title": title, "console": spec["label"], "key": name, "reason": reason,
+                            "roms": [(e.get("Name"), e["MD5"]) for e in ents], "needs": needs})
             continue
         plan[str(gid)] = (title, name, min(cands, key=lambda p: rank(p, saved, cfg["preferences"])))
 
@@ -1014,7 +1105,7 @@ def sync(cfg: dict, dry_run: bool) -> int:
         manifest.pop(gid)
 
     report = Path(cfg["report_file"] or state / "missing-roms.txt").expanduser()
-    write_report(report, cfg["username"], missing, len(plan))
+    write_report(report, cfg["username"], missing, len(plan), sources)
     if not dry_run:
         fail_path.write_text(json.dumps(failed), encoding="utf-8")
         mf_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")

@@ -137,12 +137,28 @@ By default only small cartridge systems are selected. Choose differently with
 (case and punctuation are ignored; aliases like `sfc`/`snes`/`super-nintendo` are built in);
 map yours with `console_overrides`.
 
-### Missing ROMs and patches
+### Missing ROMs, links and patches
 
-Each run writes `missing-roms.txt` (in the state folder, or `report_file`) listing every wanted
-game that was not provided and why: not in the library; an official patch exists but its base ROM
-is missing (the file says which dump it needs); patch format unsupported (7z, xdelta, ppf); or no
-patch is published. Built ROMs are verified against RA's hash before they are used.
+Each run writes `missing-roms.txt` (in the state folder, or `report_file`):
+
+1. **ROMs to look for** - at the top, one line per wanted game that was not provided: the MD5 and
+   file name RetroAchievements registered for it, so you can recognise the right dump.
+2. **Base ROMs the official patches need** - when a patch exists but its base ROM is not in your
+   library, the exact dump (name and hash from the patch's readme).
+3. **Details** - the reason for each game (not in the library; patch needs a base ROM you lack; patch
+   format unsupported; no patch published), the RetroAchievements page, and where to get it:
+   the author's page for homebrew from `sources.json`, otherwise an itch.io search link for
+   homebrew/demos and the community hub for Pokémon Mini. `sources.json` ships with the author pages
+   found so far; add yours (`{"<RA game id>": {"url": "...", "note": "..."}}`) or use `sources_file`.
+
+Missing hacks and fixes are built from RA's official patches (RAPatches repo; IPS/BPS/UPS, also inside
+.7z) using base ROMs from your library, and verified against RA's hash before they are used.
+
+**Variants of games you own.** RA also registers patched versions of some games (fixes,
+improvements, translations). With `build_variants = ["Fix", "Improvement"]` those are built from your
+own ROM too and preferred over the plain one (rule order: save file, QoL, language, region,
+revision), e.g. Pokémon Emerald's *32-bit RTC+TIMER RNG fix*. Only patches RA registered keep
+achievements working: any other patch changes the hash and RA will not recognise the game.
 
 ## Syncthing notes
 
