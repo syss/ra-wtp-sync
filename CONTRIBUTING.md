@@ -14,6 +14,7 @@ Linux, Windows and macOS, and there is no build step. Please do not add dependen
 | `ra_wtp_schedule.py` | installs the recurring job: cron (Linux), Task Scheduler (Windows), LaunchAgent (macOS) |
 | `setup.py` | guided terminal setup |
 | `start-gui.sh` / `.bat` / `.command` | double-click launchers that check for Python and open the GUI |
+| `docs/how-it-works.svg` | the explainer picture used in the README and the GUI (plain SVG, edit by hand) |
 | `sources.json` | author/download pages shown in the missing-ROMs report |
 | `tests/` | unit tests (`run_ci.py`) and a GUI smoke test (`gui_smoke.py`) |
 | `examples/` | example config and systemd units |

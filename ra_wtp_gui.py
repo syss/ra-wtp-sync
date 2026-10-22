@@ -38,6 +38,10 @@ import ra_wtp_schedule as sched
 import ra_wtp_sync as core
 
 HERE = Path(__file__).resolve().parent
+try:
+    DIAGRAM = (HERE / "docs" / "how-it-works.svg").read_text(encoding="utf-8").replace("<svg ", '<svg style="max-width:100%;height:auto" ', 1)
+except OSError:
+    DIAGRAM = ""
 LANGS = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ja": "Japanese"}
 REGIONS = {"europe": "Europe", "usa": "USA", "japan": "Japan", "world": "World"}
 SIMPLE_KEYS = ("username", "api_key_file", "src", "dest", "dest_mode", "state_dir", "saves", "consoles", "exclude_consoles",
@@ -216,7 +220,7 @@ def make_handler(st: State, port: int):
                 return
             path = self.path.split("?")[0]
             if path == "/":
-                self._send(PAGE.replace("__TOKEN__", st.token).encode(), "text/html")
+                self._send(PAGE.replace("__TOKEN__", st.token).replace("__DIAGRAM__", DIAGRAM).encode(), "text/html")
             elif path == "/api/state" and self._auth():
                 self._send(json.dumps(st.payload()).encode())
             elif path == "/api/log" and self._auth():
@@ -306,6 +310,7 @@ details.card summary{cursor:pointer}pre#schedcmd{max-height:220px}
 <h1>ra-wtp-sync</h1>
 <p class="s">Mirror your RetroAchievements <em>Want to Play</em> list into a folder. Settings file: <code id="cfgpath"></code></p>
 
+<details class="card"><summary><b>How does this work? (picture)</b></summary>__DIAGRAM__</details>
 <div class="card" id="welcome"><b>New here? Four steps and you are done:</b>
 <ol><li>Enter your RetroAchievements <b>username</b> and <b>API key</b> (help below).</li>
 <li>Pick the folder with <b>your ROMs</b> and an <b>output folder</b> for the games you want to play.</li>

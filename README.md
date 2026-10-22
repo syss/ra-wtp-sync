@@ -9,6 +9,14 @@ in an output folder; remove it and the copy is deleted again. Point any sync too
 folder (see the optional [Syncthing add-on](#add-on-syncthing)) and your handhelds and PCs
 always carry exactly the games you want to play, with RA-compatible dumps.
 
+![How it works: 1 you add a game on RetroAchievements, 2 ra-wtp-sync checks your list every 10 minutes and picks the right ROM from your library, 3 it lands in the output folder; optional: 4-6 Syncthing carries that folder to your handheld, phone or PC](docs/how-it-works.svg)
+
+In plain words: you keep using RetroAchievements as always. The tool quietly checks your *Want to Play* list
+every 10 minutes (and does nothing when it has not changed), looks for each game in the ROMs **you already own**
+and puts a copy into one folder. Take a game off your list and its copy disappears again. Your own ROM
+collection is never modified. Getting that folder onto your handheld is up to you, or you add
+[Syncthing](#add-on-syncthing) to do it automatically.
+
 It comes as a **script** (`ra_wtp_sync.py`, for the command line and schedulers) and a **GUI**
 (`ra_wtp_gui.py`, a settings page in your browser). Both use the same config file.
 
