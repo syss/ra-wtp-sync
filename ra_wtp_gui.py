@@ -34,6 +34,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import ra_wtp_schedule as sched
 import ra_wtp_sync as core
 
 HERE = Path(__file__).resolve().parent
@@ -103,6 +104,9 @@ class State:
             "default_consoles": core.DEFAULT_CONSOLES,
             "languages": LANGS, "regions": REGIONS,
             "config_path": str(self.config),
+            "schedule": {"current": sched.current(), "installed": sched.installed(),
+                         "platforms": [{"key": k, "label": sched.LABELS[k], "manual": sched.manual(k)}
+                                       for k in sched.PLATFORMS]},
         }
 
     def save(self, form: dict) -> None:
@@ -202,6 +206,10 @@ def make_handler(st: State, port: int):
             elif self.path == "/api/run":
                 st.save(body)
                 self._send(json.dumps({"ok": st.run(bool(body.get("dry")))}).encode())
+            elif self.path == "/api/schedule":
+                minutes = max(5, min(int(body.get("minutes", 30)), 1440))
+                ok, msg = sched.remove() if body.get("remove") else sched.install(minutes)
+                self._send(json.dumps({"ok": ok, "message": msg, "installed": sched.installed()}).encode())
             else:
                 self.send_error(404)
 
@@ -219,7 +227,7 @@ def main() -> int:
     port = srv.server_address[1]
     srv.RequestHandlerClass = make_handler(st, port)
     url = f"http://127.0.0.1:{port}/"
-    print(f"ra-wtp-sync settings: {url}   (Ctrl+C to stop)")
+    print(f"ra-wtp-sync settings: {url}   (Ctrl+C to stop)", flush=True)
     if not a.no_browser:
         webbrowser.open(url)
     try:
@@ -249,6 +257,8 @@ button.p{background:var(--acc);border-color:var(--acc);color:#fff}button:disable
 pre{background:#0d1117;color:#d1d5db;padding:12px;border-radius:8px;max-height:340px;overflow:auto;white-space:pre-wrap;font-size:12.5px}
 .sticky{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 0;margin-top:20px;display:flex;gap:8px;flex-wrap:wrap}
 .ok{color:#16a34a}
+.tabs{display:flex;gap:4px;margin-bottom:8px}.tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+details.card summary{cursor:pointer}pre#schedcmd{max-height:220px}
 </style></head><body><main>
 <h1>ra-wtp-sync</h1>
 <p class="s">Mirror your RetroAchievements <em>Want to Play</em> list into a folder. Config: <code id="cfgpath"></code></p>
@@ -260,7 +270,7 @@ pre{background:#0d1117;color:#d1d5db;padding:12px;border-radius:8px;max-height:3
 
 <h2>Folders</h2><div class="card">
 <label class="f">ROM library to read from <span class="hint">(never modified)</span></label><input type="text" id="src" placeholder="/path/to/roms">
-<label class="f">Output folder <span class="hint">(e.g. inside your Syncthing folder; owned by this tool)</span></label><input type="text" id="dest" placeholder="/path/to/Sync/roms-wtp">
+<label class="f">Output folder <span class="hint">(owned by this tool: only files it copied are ever deleted)</span></label><input type="text" id="dest" placeholder="/path/to/roms-wtp">
 <label class="f">Save-file folders <span class="hint">(one per line; a ROM that already has a save is preferred)</span></label><textarea id="saves" rows="2"></textarea>
 </div>
 
@@ -280,6 +290,22 @@ pre{background:#0d1117;color:#d1d5db;padding:12px;border-radius:8px;max-height:3
 <label><input type="checkbox" id="build"> Build missing hacks from RetroAchievements' official patches (needs the base ROM in your library)</label><br>
 <label><input type="checkbox" id="variants"> Also build RetroAchievements' official <b>Fix / Improvement</b> versions of games I own (e.g. Pokémon Emerald RNG fix); they are preferred over the plain ROM unless the plain one already has a save</label><br>
 <label><input type="checkbox" id="started"> Also keep games I started but have not beaten yet</label></div>
+
+<h2>Schedule</h2><div class="card">
+<div class="tabs" id="schedtabs"></div>
+<pre id="schedcmd"></pre>
+<div class="bar"><button class="p" id="schedinst" onclick="schedule(false)">Run every</button>
+<input type="number" id="schedmin" value="30" min="5" max="1440" style="width:70px"> <span class="hint">minutes</span>
+<button onclick="schedule(true)">Remove schedule</button><span class="hint" id="schedmsg"></span></div>
+<p class="hint">Installing works for the system you are on; the other tabs show how to set it up by hand there.</p></div>
+
+<h2>Add-ons <span class="hint">(optional)</span></h2>
+<details class="card"><summary><b>Share the output folder with Syncthing</b></summary>
+<p>This tool only fills the output folder; any sync tool can carry it to your other devices. For <a href="https://syncthing.net" target="_blank" rel="noopener">Syncthing</a>:</p>
+<ul><li>Share the output folder as a normal send &amp; receive folder (or send-only from the machine running this).
+When a game leaves your list, the file is deleted there and Syncthing propagates it.</li>
+<li>Mind the folder's file versioning if you want deletions to be final.</li>
+<li>Copies are written atomically via a <code>.syncthing.*.tmp</code> file that Syncthing ignores, so peers never see half-written files.</li></ul></details>
 
 <h2>Run</h2><div class="card">
 <div class="bar"><button onclick="run(true)">Save &amp; dry run</button><button class="p" onclick="run(false)">Save &amp; run now</button><button onclick="report()">Show missing-ROMs list</button></div>
@@ -321,7 +347,14 @@ async function load(first){S=await (await api("/api/state")).json();const c=S.co
  for(const x of c.exclude_consoles||[])sel_.delete(String(x));
  const lp=c.preferences.languages,rp=c.preferences.regions;
  chk($("langs"),Object.entries(S.languages).map(([k,v])=>[k,v]),new Set(lp));chk($("regions"),Object.entries(S.regions).map(([k,v])=>[k,v]),new Set(rp));draw()}
-load(true);
+let schedTab;
+function drawSched(){const sc=S.schedule;schedTab=schedTab||sc.current;const t=$("schedtabs");t.innerHTML="";
+ for(const p of sc.platforms){const b=document.createElement("button");b.textContent=p.label+(p.key==sc.current?" (this system)":"");b.className=p.key==schedTab?"on":"";b.onclick=()=>{schedTab=p.key;drawSched()};t.appendChild(b)}
+ $("schedcmd").textContent=sc.platforms.find(p=>p.key==schedTab).manual;
+ $("schedinst").disabled=schedTab!=sc.current;$("schedmsg").textContent=sc.installed?"Schedule is installed on this system ✓":""}
+async function schedule(rm){const r=await (await api("/api/schedule",{method:"POST",body:JSON.stringify({remove:rm,minutes:+$("schedmin").value||30})})).json();
+ S.schedule.installed=r.installed;drawSched();$("schedmsg").textContent=r.message}
+load(true).then(drawSched);
 </script></body></html>
 """
 

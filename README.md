@@ -5,9 +5,12 @@ Keep a folder of ROMs in sync with your [RetroAchievements](https://retroachieve
 **Want to Play** list.
 
 Add a game to your list on the site and the matching ROM from *your own* library shows up
-in an output folder; remove it and the copy is deleted again. Point
-[Syncthing](https://syncthing.net) (or any other sync tool) at that folder and your
-handhelds and PCs always carry exactly the games you want to play, with RA-compatible dumps.
+in an output folder; remove it and the copy is deleted again. Point any sync tool at that
+folder (see the optional [Syncthing add-on](#add-on-syncthing)) and your handhelds and PCs
+always carry exactly the games you want to play, with RA-compatible dumps.
+
+It comes as a **script** (`ra_wtp_sync.py`, for the command line and schedulers) and a **GUI**
+(`ra_wtp_gui.py`, a settings page in your browser). Both use the same config file.
 
 * **Hash matching, not file names.** ROMs are matched against the hashes RetroAchievements
   registers for each game, so every file copied is one that earns achievements.
@@ -18,7 +21,7 @@ handhelds and PCs always carry exactly the games you want to play, with RA-compa
 * **Your library stays untouched.** The source is only opened for reading. The output folder
   is owned by the tool, and only files it copied itself (tracked in a manifest) are ever deleted.
 * **Safe by default.** An empty or suspiciously short answer from the API never deletes
-  anything; copies are atomic (Syncthing never sees half-written files); runs are locked.
+  anything; copies are atomic (a sync tool never sees half-written files); runs are locked.
 * **Every RetroAchievements console is available.** Select and deselect them in the config
   (`consoles = ["all"]`, `exclude_consoles`), on the command line, or in the settings GUI.
 * **Auto-patching.** Hacks, fixes and translations that RetroAchievements publishes as official
@@ -29,12 +32,12 @@ handhelds and PCs always carry exactly the games you want to play, with RA-compa
 
 ## Requirements
 
-Python 3.11 or newer on **Linux, macOS or Windows** (tested on all three by CI). Nothing else to
+Python 3.11 or newer on **Linux, Windows or macOS** (tested on all three by CI). Nothing else to
 install. Below, `python` means `python3` on Linux/macOS and `py` (or `python`) on Windows.
 
 ## Quick start
 
-Easiest: run the guided setup. It asks a few questions (you paste your API key when asked), writes
+Run the guided setup. It asks a few questions (you paste your API key when asked), writes
 the git-ignored `config.toml`, runs a dry run, and can schedule the sync with your OS's scheduler.
 
 ```
@@ -43,8 +46,17 @@ cd ra-wtp-sync
 python setup.py
 ```
 
-Prefer clicking? `python ra_wtp_gui.py` opens a small settings page in your browser (served on
-127.0.0.1 only): pick consoles, folders and preferences, then save and start a dry run or a real run.
+### GUI
+
+`python ra_wtp_gui.py` opens a small settings page in your browser (served on 127.0.0.1 only,
+no extra packages): pick consoles, folders and preferences, save, start a dry run or a real run,
+and install the recurring schedule. The *Schedule* section has one tab per system, in the order
+**Linux, Windows, macOS**; the tab for the system you are on can install the job with one click, the
+others show the exact command to use there.
+
+### Script
+
+Guided setup: `python setup.py` (below). Manual setup:
 
 Manual setup:
 
@@ -65,35 +77,35 @@ few minutes for a big collection; later runs only look at new files.
 
 ### Where things live
 
-| | Linux | macOS | Windows |
+| | Linux | Windows | macOS |
 | --- | --- | --- | --- |
-| config (after `config.toml` next to the script) | `~/.config/ra-wtp-sync/` | `~/Library/Application Support/ra-wtp-sync/` | `%APPDATA%\ra-wtp-sync\` |
-| cache, manifest, report | `~/.local/state/ra-wtp-sync/` | `~/Library/Application Support/ra-wtp-sync/state/` | `%LOCALAPPDATA%\ra-wtp-sync\` |
+| config (after `config.toml` next to the script) | `~/.config/ra-wtp-sync/` | `%APPDATA%\ra-wtp-sync\` | `~/Library/Application Support/ra-wtp-sync/` |
+| cache, manifest, report | `~/.local/state/ra-wtp-sync/` | `%LOCALAPPDATA%\ra-wtp-sync\` | `~/Library/Application Support/ra-wtp-sync/state/` |
 
 (`XDG_CONFIG_HOME` / `XDG_STATE_HOME` are honoured on Linux; override any of it with `state_dir`,
 `api_key_file`, `--config`.)
 
 ### Run it regularly
 
-`python setup.py` offers to do this for you. By hand:
+`python setup.py` and the GUI's *Schedule* section do this for you. By hand:
 
 * **Linux** - cron: `7,37 * * * * python3 /path/to/ra-wtp-sync/ra_wtp_sync.py`, or the systemd user
   timer in `examples/` (`ra-wtp-sync.service` + `ra-wtp-sync.timer`, copy to `~/.config/systemd/user/`,
   then `systemctl --user enable --now ra-wtp-sync.timer`).
-* **macOS** - a LaunchAgent (`setup.py` writes `~/Library/LaunchAgents/ra-wtp-sync.plist` and loads it).
 * **Windows** - Task Scheduler:
   `schtasks /Create /TN ra-wtp-sync /SC MINUTE /MO 30 /TR "pythonw C:\path\to\ra_wtp_sync.py"`.
+* **macOS** - a LaunchAgent (`setup.py` writes `~/Library/LaunchAgents/ra-wtp-sync.plist` and loads it).
 
 Overlapping runs are prevented by a lock, so a slow first run never collides with the next one.
 
 ### Platform notes
 
+* **Windows:** enable long paths if your library has very deep folders. File names that are not
+  valid on Windows (for example containing `:`) cannot exist in the library there; patched ROMs
+  are named safely. The output folder is plain files, so any sync tool works.
 * **macOS:** if you get a TLS certificate error with a python.org Python, run *Install
   Certificates.command* from the Python folder in Applications (or `pip install certifi`).
   File names are compared Unicode-normalised, so accented names match on macOS volumes.
-* **Windows:** enable long paths if your library has very deep folders. File names that are not
-  valid on Windows (for example containing `:`) cannot exist in the library there; patched ROMs
-  are named safely. The sync folder is plain files, so Syncthing, OneDrive & co. all work.
 * **All:** source and output must be different folders; the library is only opened for reading.
 
 ## Configuration
@@ -176,15 +188,9 @@ own ROM too and preferred over the plain one (rule order: save file, QoL, langua
 revision), e.g. Pokémon Emerald's *32-bit RTC+TIMER RNG fix*. Only patches RA registered keep
 achievements working: any other patch changes the hash and RA will not recognise the game.
 
-## Syncthing notes
-
-* Share `dest` as a normal send & receive folder (or send-only from the machine running this).
-  When a game leaves your list, the file is deleted in `dest` and Syncthing propagates it.
-* Keep the file versioning setting of the folder in mind if you want deletions to be final.
-* Disc based systems are available but off by default: their files are big.
-
 ## Limitations
 
+* Disc based systems are available but off by default: their files are big.
 * Only ROMs that exist in your library can be copied. Hacks and homebrew need the patched ROM, or
   the base ROM plus an official RA patch in IPS, BPS or UPS format (also inside .7z); other patch formats (xdelta, ppf) are
   reported as unsupported.
@@ -193,10 +199,27 @@ achievements working: any other patch changes the hash and RA will not recognise
   distributions have `7z`). Other archive types (rar, ...) are not inspected.
 * Language/region/QoL detection is based on file-name conventions (No-Intro, GoodTools).
 
+## Add-ons
+
+Optional; nothing above depends on them.
+
+### Add-on: Syncthing
+
+[Syncthing](https://syncthing.net) (or Resilio, OneDrive, rsync, ...) can carry the output folder to your
+handhelds and other PCs. This tool only fills the folder.
+
+* Share `dest` as a normal send & receive folder (or send-only from the machine running this).
+  When a game leaves your list, the file is deleted in `dest` and Syncthing propagates it.
+* Keep the folder's file versioning setting in mind if you want deletions to be final.
+* Copies are written through a `.syncthing.<name>.tmp` file, which Syncthing ignores, so peers never
+  see a half-written ROM.
+* Keep `state_dir` (hash cache, manifest) outside the shared folder; it is not meant to be synced.
+
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests
+python3 tests/run_ci.py      # unit tests
+python3 tests/gui_smoke.py   # starts the GUI and queries it
 ```
 
 ## License

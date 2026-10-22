@@ -17,7 +17,7 @@ username = "YourRAUsername"
 src = "/path/to/roms"
 
 # Output folder. It is owned by this tool: one sub-folder per system, and only files
-# this tool copied are ever deleted. Point your Syncthing/other sync folder at it.
+# this tool copied are ever deleted. Any sync tool (e.g. the optional Syncthing add-on, see README) can share it.
 dest = "/path/to/synced-folder/roms-wtp"
 
 # Where the hash cache and the manifest live (not synced).
