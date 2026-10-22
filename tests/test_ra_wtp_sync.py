@@ -192,6 +192,22 @@ class TitleMatching(unittest.TestCase):
 
 
 class Hashing2(unittest.TestCase):
+    def test_arduboy_hex_line_endings_are_normalised(self):
+        lf = b":100000000C945D000C946E000C946E000C946E00A1\n:00000001FF\n"
+        crlf = lf.replace(b"\n", b"\r\n")
+        self.assertIn(hashlib.md5(lf).hexdigest(), m.md5s(crlf, "arduboy"))
+        self.assertIn("arduboy", m.build_console_table(m.FALLBACK_CONSOLES)["arduboy"]["dirs"])
+        self.assertEqual(m.build_console_table(m.FALLBACK_CONSOLES)["arduboy"]["hash"], "arduboy")
+
+    def test_arduboy_package_is_hashed_via_its_hex(self):
+        with tempfile.TemporaryDirectory() as d:
+            hexdata = b":100000000C945D00\n" * 80
+            p = os.path.join(d, "game.arduboy")
+            with zipfile.ZipFile(p, "w") as z:
+                z.writestr("info.json", "{}")
+                z.writestr("game.hex", hexdata)
+            self.assertIn(hashlib.md5(hexdata).hexdigest(), m.file_hashes(p, "arduboy", 10**7))
+
     def test_only_first_64_mib_are_hashed(self):
         big = os.urandom(1024) * (65 * 1024)          # 65 MiB
         self.assertIn(hashlib.md5(big[:64 * 1024 * 1024]).hexdigest(), m.md5s(big, "n64"))
@@ -225,6 +241,7 @@ class Report(unittest.TestCase):
             self.assertIn("retroachievements.org/game/42", txt)
             self.assertIn("https://itch.io/search?q=Tiny%20Game", txt)   # homebrew without known source
             self.assertIn("pokemon-mini.net", txt)
+            self.assertIn("arduboy.ried.cl", m.find_links({"id": 1, "title": "Dinosaur", "key": "arduboy"}, {})[0])
             self.assertIn("https://example.itch.io/known", txt)          # known author page wins
             self.assertNotIn("itch.io/search?q=Known", txt)
 

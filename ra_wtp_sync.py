@@ -58,7 +58,7 @@ API = "https://retroachievements.org/API/"
 USER_AGENT = f"ra-wtp-sync/{__version__} (+https://github.com/)"
 
 # RA console id -> (short key, hash style, extra folder names looked up below `src`).
-# Hash styles: plain | nes | fds | snes | n64 | lynx | a7800 describe how RA hashes the ROM file;
+# Hash styles: plain | nes | fds | snes | n64 | lynx | a7800 | arduboy describe how RA hashes the ROM file;
 # "name" is used for discs and other complex formats that RA hashes in its own way: those games
 # are matched by title (or an "[RA 1234]" tag in the file name) instead, which is less strict.
 # Consoles not listed here are still available under a key made from their RA name.
@@ -101,6 +101,7 @@ KNOWN_CONSOLES: dict[int, tuple[str, str, list[str]]] = {
     57: ("channelf", "plain", []),
     62: ("3ds", "name", ["n3ds"]),
     63: ("supervision", "plain", []),
+    71: ("arduboy", "arduboy", []),
     76: ("pcenginecd", "name", ["tgcd", "turbografxcd"]),
     77: ("jaguarcd", "name", []),
     78: ("dsi", "name", ["nintendodsi"]),
@@ -402,6 +403,9 @@ def md5s(data: bytes, style: str) -> set[str]:
         out.add(_md5(data[512:]))
     elif style == "n64":
         out.add(_md5(n64_to_z64(data)))
+    elif style == "arduboy":      # .hex text: RA normalises to Unix line endings first
+        out.add(_md5(data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")))
+        out.add(_md5(data.replace(b"\r", b"")))
     return out
 
 
@@ -475,7 +479,7 @@ def extract_7z(path: str, max_bytes: int):
 def archive_members(path: str, max_bytes: int):
     """(name, bytes) of ROM-ish members of a .zip or .7z file."""
     low = path.lower()
-    if low.endswith(".zip"):
+    if low.endswith((".zip", ".arduboy")):
         with zipfile.ZipFile(path) as z:
             for i in z.infolist():
                 if not i.is_dir() and not i.filename.lower().endswith(SKIP_EXT) and 1000 < i.file_size < max_bytes:
@@ -489,7 +493,7 @@ def archive_members(path: str, max_bytes: int):
 def file_hashes(path: str, style: str, max_bytes: int) -> set[str]:
     res: set[str] = set()
     try:
-        if path.lower().endswith((".zip", ".7z")):
+        if path.lower().endswith((".zip", ".7z", ".arduboy")):
             for _, data in archive_members(path, max_bytes):
                 res |= md5s(data, style)
         elif os.path.getsize(path) < max_bytes:
@@ -789,7 +793,7 @@ def patches_in_zip(data: bytes) -> list[tuple[str, bytes]]:
 def rom_blobs(path: str, max_bytes: int):
     """Yield (display name, bytes) for the ROM image(s) in a library file."""
     try:
-        if path.lower().endswith((".zip", ".7z")):
+        if path.lower().endswith((".zip", ".7z", ".arduboy")):
             yield from archive_members(path, max_bytes)
         elif os.path.getsize(path) < max_bytes:
             yield os.path.basename(path), Path(path).read_bytes()
@@ -930,6 +934,9 @@ def find_links(m: dict, sources: dict) -> list[str]:
         links.append("https://itch.io/search?q=" + urllib.parse.quote(clean))
     if m["key"] == "pokemini":
         links.append("https://pokemon-mini.net/   (community hub with Pokemon Mini homebrew downloads)")
+    if m["key"] == "arduboy":
+        links.append("https://arduboy.ried.cl/   (community catalog of Arduboy games with .hex downloads)")
+        links.append("https://arduboy.com/   (official site)")
     return links
 
 

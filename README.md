@@ -126,6 +126,8 @@ which ones are selected, and how each is matched:
 * **hash** - cartridge based systems: the file's content hash must equal one RA registered, so only
   ROMs that earn achievements are copied (zip members, NES/SNES/Lynx/7800 headers and byte-swapped
   N64 dumps are handled).
+* **hash**, special cases handled: NES/FDS/Lynx/7800/SNES/PC Engine headers, byte-swapped N64, and Arduboy `.hex`
+  files (RA hashes them after converting to Unix line endings; `.arduboy` packages are read via their hex).
 * **title** - discs and other formats RA hashes in its own way (PlayStation, PS2, PSP, GameCube,
   Wii, DS/DSi/3DS, Saturn, Dreamcast, Sega CD, arcade, ...): matched by game title or an
   `[RA 1234]` tag in the file name. Less strict, and the files can be huge. Use single-file
