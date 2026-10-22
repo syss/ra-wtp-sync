@@ -59,7 +59,7 @@ def toml_list(items: list[str]) -> str:
     return "[" + ", ".join(toml_str(i) for i in items) + "]"
 
 
-def schedule(minutes: int = 30) -> None:
+def schedule(minutes: int = 10) -> None:
     """Install a recurring job with the OS's own scheduler."""
     print(ra_wtp_schedule.install(minutes)[1])
 
@@ -138,7 +138,7 @@ regions = {toml_list(regions)}
         return 1
     if yes("\nLooks right? Run it for real now?", True):
         subprocess.run([sys.executable, str(SYNC)])
-    if yes("\nRun it automatically every 30 minutes?", False):
+    if yes("\nRun it automatically every 10 minutes (it only does real work when your RA list changed)?", False):
         schedule()
     print("Done. Re-run ra_wtp_sync.py any time (--dry-run to preview), or open ra_wtp_gui.py to change settings.")
     return 0

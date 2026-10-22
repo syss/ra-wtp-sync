@@ -160,6 +160,7 @@ DEFAULTS = {
     "max_rom_mb": 200,
     "hash_cache_days": 7,
     "min_list_fraction": 0.5,
+    "full_run_hours": 24,    # with --if-changed: do the full library pass at least this often
     "build_patches": True,   # build missing hacks from RA's official patches
     "patched_dir": "",       # where built ROMs are kept (default: <state_dir>/patched)
     # RA also registers patched versions of games you may own (fixes, improvements, translations...).
@@ -1101,17 +1102,30 @@ def write_report(path: Path, user: str, missing: list[dict], matched: int, sourc
 
 
 # --------------------------------------------------------------------------- main
-def sync(cfg: dict, dry_run: bool) -> int:
-    """Run one sync; the lock file and the hash cache are closed again however it ends."""
+def run_fingerprint(cfg: dict, games: dict, selected: list[str]) -> str:
+    """Hash of everything that decides what a full run would do, except the library contents:
+    the RA list, the selected systems and the settings that shape the result."""
+    keys = ("src", "dest", "dest_mode", "include_started", "build_patches", "build_variants",
+            "max_rom_mb", "preferences", "saves")
+    blob = {"games": sorted([i, v[0], v[1]] for i, v in games.items()), "consoles": sorted(selected),
+            **{k: cfg.get(k) for k in keys}}
+    return hashlib.sha256(json.dumps(blob, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def sync(cfg: dict, dry_run: bool, if_changed: bool = False) -> int:
+    """Run one sync; the lock file and the hash cache are closed again however it ends.
+    if_changed: ask RA for the list (one cheap call) and stop right there when nothing changed
+    since the last full run, unless that run is older than `full_run_hours` (which also picks up
+    new files in the library)."""
     cleanup: list = []
     try:
-        return _sync(cfg, dry_run, cleanup)
+        return _sync(cfg, dry_run, cleanup, if_changed)
     finally:
         for close in reversed(cleanup):
             close()
 
 
-def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
+def _sync(cfg: dict, dry_run: bool, cleanup: list, if_changed: bool = False) -> int:
     if not cfg["username"]:
         sys.exit("no RetroAchievements username (config 'username', --username or $RA_USER)")
     if not cfg["src"] or not cfg["dest"]:
@@ -1146,6 +1160,19 @@ def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
     # Outage guard: an empty/short answer must never wipe the library.
     if not games or (len(manifest) > 10 and len(wanted) < cfg["min_list_fraction"] * len(manifest)):
         sys.exit("RA list empty or suspiciously small - refusing to change anything")
+
+    fp = run_fingerprint(cfg, games, list(table))
+    last_path = state / "last-run.json"
+    if if_changed and not dry_run and last_path.exists():
+        try:
+            last = json.loads(last_path.read_text(encoding="utf-8"))
+        except ValueError:
+            last = {}
+        age_h = (time.time() - last.get("t", 0)) / 3600
+        if last.get("fp") == fp and age_h < cfg["full_run_hours"]:
+            log(f"nothing changed on RA (list of {len(games)} games); next full pass in "
+                f"{cfg['full_run_hours'] - age_h:.1f} h")
+            return 0
 
     saved = load_saves(cfg["saves"])
     if cfg["saves"]:
@@ -1288,6 +1315,7 @@ def _sync(cfg: dict, dry_run: bool, cleanup: list) -> int:
     if not dry_run:
         fail_path.write_text(json.dumps(failed), encoding="utf-8")
         mf_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+        last_path.write_text(json.dumps({"fp": fp, "t": time.time()}), encoding="utf-8")
     log(f"done: {len(plan)} matched, {len(missing)} missing - list with reasons: {report}")
     return 0
 
@@ -1330,6 +1358,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--list-consoles", action="store_true", help="show all available consoles and exit")
     ap.add_argument("--include-started", action="store_true", help="also keep games you started but have not beaten")
     ap.add_argument("--no-patches", action="store_true", help="do not build missing hacks from RA patches")
+    ap.add_argument("--if-changed", action="store_true",
+                    help="for schedulers: check the RA list (one API call) and do nothing if it is unchanged "
+                         "since the last full run (which is repeated at least every full_run_hours)")
     ap.add_argument("-n", "--dry-run", action="store_true", help="show what would change, change nothing")
     ap.add_argument("--version", action="version", version=__version__)
     return ap
@@ -1343,7 +1374,7 @@ def main(argv=None) -> int:
     cfg = load_config(args)
     if args.list_consoles:
         return list_consoles(cfg)
-    return sync(cfg, args.dry_run)
+    return sync(cfg, args.dry_run, args.if_changed)
 
 
 if __name__ == "__main__":

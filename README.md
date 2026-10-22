@@ -107,12 +107,19 @@ few minutes for a big collection; later runs only look at new files.
 
 `python setup.py` and the GUI's *Schedule* section do this for you. By hand:
 
-* **Linux** - cron: `7,37 * * * * python3 /path/to/ra-wtp-sync/ra_wtp_sync.py`, or the systemd user
+* **Linux** - cron: `*/10 * * * * python3 /path/to/ra-wtp-sync/ra_wtp_sync.py`, or the systemd user
   timer in `examples/` (`ra-wtp-sync.service` + `ra-wtp-sync.timer`, copy to `~/.config/systemd/user/`,
   then `systemctl --user enable --now ra-wtp-sync.timer`).
 * **Windows** - Task Scheduler:
-  `schtasks /Create /TN ra-wtp-sync /SC MINUTE /MO 30 /TR "pythonw C:\path\to\ra_wtp_sync.py"`.
+  `schtasks /Create /TN ra-wtp-sync /SC MINUTE /MO 10 /TR "pythonw C:\path\to\ra_wtp_sync.py --if-changed"`.
 * **macOS** - a LaunchAgent (`setup.py` writes `~/Library/LaunchAgents/ra-wtp-sync.plist` and loads it).
+
+**How the schedule stays cheap.** The jobs run every 10 minutes with `--if-changed`: each run asks RetroAchievements
+for your Want to Play list (one API call), compares it and your settings with the last full run, and **stops
+right there if nothing changed**. A full pass (library scan, copying, deleting, patching) happens when the list
+or a setting changed, after a failed run, and at least every `full_run_hours` (default 24) so that new files in
+your library are found. After adding ROMs to your library, run `python ra_wtp_sync.py` once by hand (or press
+*Save & run now* in the GUI) to pick them up immediately.
 
 Overlapping runs are prevented by a lock, so a slow first run never collides with the next one.
 
