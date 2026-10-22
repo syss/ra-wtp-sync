@@ -30,10 +30,14 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Compile all scripts
-        run: python -m py_compile ra_wtp_sync.py ra_wtp_gui.py ra_wtp_schedule.py setup.py
+        run: python -m py_compile ra_wtp_sync.py ra_wtp_gui.py ra_wtp_schedule.py setup.py tests/gui_smoke.py tests/schedule_smoke.py
       - name: Unit tests
         run: python tests/run_ci.py
       - name: CLI smoke test (console list works offline)
         run: python ra_wtp_sync.py --list-consoles --state-dir ci-state
       - name: GUI smoke test (server starts and serves the page)
         run: python tests/gui_smoke.py
+      - name: Launcher smoke test (start-gui script of this OS)
+        run: python tests/gui_smoke.py launcher
+      - name: Scheduler round trip (install, detect, remove)
+        run: python tests/schedule_smoke.py
