@@ -19,9 +19,27 @@ handhelds and PCs always carry exactly the games you want to play, with RA-compa
   is owned by the tool, and only files it copied itself (tracked in a manifest) are ever deleted.
 * **Safe by default.** An empty or suspiciously short answer from the API never deletes
   anything; copies are atomic (Syncthing never sees half-written files); runs are locked.
+* **Every RetroAchievements console is available.** Select and deselect them in the config
+  (`consoles = ["all"]`, `exclude_consoles`), on the command line, or in the settings GUI.
+* **Auto-patching.** Hacks, fixes and translations that RetroAchievements publishes as official
+  patches are built from base ROMs in your library when they are missing, and verified by hash.
+* **Missing-ROMs list.** Every run writes `missing-roms.txt`: each wanted game that could not be
+  provided, with the reason and a link.
 * Standard library only, Python 3.11+. No ROMs are downloaded or distributed - you bring your own.
 
 ## Quick start
+
+Easiest: run the guided setup (asks a few questions, you paste your API key when asked):
+
+```bash
+git clone <this repo> && cd ra-wtp-sync
+./setup.sh
+```
+
+Prefer clicking? `./ra_wtp_gui.py` opens a small settings page in your browser (local only):
+pick consoles, folders and preferences, then save and start a dry run or a real run.
+
+Manual setup:
 
 ```bash
 git clone <this repo> && cd ra-wtp-sync
@@ -68,27 +86,51 @@ Settings come from (highest first) command line, `$RA_USER` / `$RA_API_KEY`, the
 | `state_dir` | hash cache, manifest, report |
 | `saves` | folders searched for existing save files |
 | `include_started` | also keep games you started but have not beaten |
-| `consoles` | which systems to handle - leave out the big disc based ones |
+| `consoles`, `exclude_consoles` | which systems to handle: keys, ids or `"all"` |
+| `build_patches`, `patched_dir` | build missing hacks from official RA patches |
+| `report_file` | where the missing-ROMs list is written |
 | `preferences` | `order`, `languages`, `regions` used to pick one ROM per game |
 | `console_overrides.<name>` | other folder names / extra systems (`id`, `dirs`, `hash`) |
 | `max_rom_mb`, `hash_cache_days`, `min_list_fraction` | limits and safety net |
 
-Built-in systems: Mega Drive/Genesis, N64, SNES, Game Boy, Game Boy Color, GBA, NES,
-PC Engine, Master System, Game Gear, Pokémon Mini, Virtual Boy, Channel F, Atari 2600.
-Source folders are found by name below `src` (case-insensitive, aliases such as `sfc`/`snes`
-are built in); map yours with `console_overrides`.
+### Consoles
+
+`./ra_wtp_sync.py --list-consoles` shows every console RetroAchievements supports (about 55),
+which ones are selected, and how each is matched:
+
+* **hash** - cartridge based systems: the file's content hash must equal one RA registered, so only
+  ROMs that earn achievements are copied (zip members, NES/SNES/Lynx/7800 headers and byte-swapped
+  N64 dumps are handled).
+* **title** - discs and other formats RA hashes in its own way (PlayStation, PS2, PSP, GameCube,
+  Wii, DS/DSi/3DS, Saturn, Dreamcast, Sega CD, arcade, ...): matched by game title or an
+  `[RA 1234]` tag in the file name. Less strict, and the files can be huge. Use single-file
+  formats (CHD, ISO, RVZ, WBFS, zip, NDS, ...); `.cue/.bin` sets are not supported.
+
+By default only small cartridge systems are selected. Choose differently with
+`consoles = [...]` / `["all"]` / `exclude_consoles = [...]` in the config, `--consoles` /
+`--exclude` on the command line, or the GUI. Source folders are found by name below `src`
+(case and punctuation are ignored; aliases like `sfc`/`snes`/`super-nintendo` are built in);
+map yours with `console_overrides`.
+
+### Missing ROMs and patches
+
+Each run writes `missing-roms.txt` (in the state directory, or `report_file`) listing every wanted
+game that was not provided and why: not in the library; an official patch exists but its base ROM
+is missing (the file says which dump it needs); patch format unsupported (7z, xdelta, ppf); or no
+patch is published. Built ROMs are verified against RA's hash before they are used.
 
 ## Syncthing notes
 
 * Share `dest` as a normal send & receive folder (or send-only from the machine running this).
   When a game leaves your list, the file is deleted in `dest` and Syncthing propagates it.
 * Keep the file versioning setting of the folder in mind if you want deletions to be final.
-* Disc based systems (PlayStation, GameCube, Wii, ...) are deliberately not built in.
+* Disc based systems are available but off by default: their files are big.
 
 ## Limitations
 
-* Only ROMs that exist in your library can be copied. Hacks and homebrew need the patched ROM
-  to be present; RA's published patches are not applied by this tool.
+* Only ROMs that exist in your library can be copied. Hacks and homebrew need the patched ROM, or
+  the base ROM plus an official RA patch in IPS, BPS or UPS format; other patch formats are
+  reported as unsupported.
 * Compressed formats other than `.zip` (e.g. `.7z`) are not inspected.
 * Language/region/QoL detection is based on file-name conventions (No-Intro, GoodTools).
 

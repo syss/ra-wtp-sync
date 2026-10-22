@@ -95,5 +95,119 @@ class Safety(unittest.TestCase):
                 m.sync(cfg, True)
 
 
+def _vi(n):  # BPS/UPS varint encoder
+    out = bytearray()
+    while True:
+        x = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(x)
+            n -= 1
+        else:
+            out.append(0x80 | x)
+            return bytes(out)
+
+
+class Patching(unittest.TestCase):
+    base = bytes(range(256)) * 8
+
+    def test_ips_with_rle_and_truncate(self):
+        p = b"PATCH" + (10).to_bytes(3, "big") + (3).to_bytes(2, "big") + b"abc" \
+            + (20).to_bytes(3, "big") + b"\0\0" + (5).to_bytes(2, "big") + b"Z" + b"EOF" + (100).to_bytes(3, "big")
+        out = m.apply_ips(self.base, p)
+        self.assertEqual(out[10:13], b"abc")
+        self.assertEqual(out[20:25], b"ZZZZZ")
+        self.assertEqual(len(out), 100)
+
+    def test_bps_roundtrip_and_wrong_base(self):
+        import zlib
+        target = self.base[:100] + b"HACKED" + self.base[106:]
+        body = b"BPS1" + _vi(len(self.base)) + _vi(len(target)) + _vi(0)
+        body += _vi(((100 - 1) << 2) | 0)                 # SourceRead 100 bytes
+        body += _vi(((6 - 1) << 2) | 1) + b"HACKED"       # TargetRead
+        body += _vi(((len(target) - 106 - 1) << 2) | 0)   # SourceRead rest
+        body += zlib.crc32(self.base).to_bytes(4, "little") + zlib.crc32(target).to_bytes(4, "little")
+        patch = body + zlib.crc32(body).to_bytes(4, "little")
+        self.assertEqual(m.apply_bps(self.base, patch), target)
+        with self.assertRaises(ValueError):
+            m.apply_bps(b"x" + self.base, patch)
+
+    def test_ups_xor(self):
+        import zlib
+        target = bytearray(self.base); target[5] ^= 0x0F; target[6] ^= 0xF0
+        body = b"UPS1" + _vi(len(self.base)) + _vi(len(target)) + _vi(5) + bytes([0x0F, 0xF0, 0])
+        body += zlib.crc32(self.base).to_bytes(4, "little") + zlib.crc32(bytes(target)).to_bytes(4, "little")
+        patch = body + zlib.crc32(body).to_bytes(4, "little")
+        self.assertEqual(m.apply_ups(self.base, patch), bytes(target))
+
+    def test_only_rapatches_urls_are_fetched(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(m.fetch_patch_zip("https://example.com/evil.zip", Path(d)))
+
+
+class Consoles(unittest.TestCase):
+    table = m.build_console_table(m.FALLBACK_CONSOLES)
+
+    def sel(self, **kw):
+        return set(m.select_consoles(self.table, dict(m.DEFAULTS, **kw)))
+
+    def test_default_is_small_cartridge_set(self):
+        s = self.sel()
+        self.assertIn("n64", s)
+        self.assertNotIn("wii", s)
+        self.assertNotIn("psx", s)
+
+    def test_all_and_exclude(self):
+        everything = self.sel(consoles=["all"])
+        self.assertGreater(len(everything), 40)
+        self.assertEqual(self.sel(consoles=["all"], exclude_consoles=["wii", "gamecube", 12]),
+                         everything - {"wii", "gamecube", "psx"})
+
+    def test_select_by_id_and_unknown(self):
+        self.assertEqual(self.sel(consoles=[2, "gba"]), {"n64", "gba"})
+        with self.assertRaises(SystemExit):
+            self.sel(consoles=["nope"])
+
+    def test_every_ra_console_is_available(self):
+        self.assertTrue(set(m.FALLBACK_CONSOLES) <= {v["id"] for v in self.table.values()})
+
+    def test_disc_systems_match_by_title(self):
+        self.assertEqual(self.table["psx"]["hash"], "name")
+        self.assertEqual(self.table["snes"]["hash"], "snes")
+
+    def test_folder_name_aliases(self):
+        with tempfile.TemporaryDirectory() as d:
+            for n in ("Super Nintendo", "N64", "game-boy-advance"):
+                os.mkdir(os.path.join(d, n))
+            self.assertEqual([p.name for p in m.find_dirs(Path(d), ["n64"])], ["N64"])
+            self.assertEqual([p.name for p in m.find_dirs(Path(d), ["gameboyadvance"])], ["game-boy-advance"])
+
+
+class TitleMatching(unittest.TestCase):
+    def test_titles_normalise(self):
+        n = m.norm_title
+        self.assertEqual(n("The Legend of Zelda: Ocarina of Time"), n("Legend of Zelda, The - Ocarina of Time (USA) (Rev A)"))
+        self.assertEqual(n("~Hack~ Super Mario 64: Chaos Edition"), n("Super Mario 64 - Chaos Edition"))
+        self.assertEqual(n("Pok\u00e9mon Crystal Version"), n("Pokemon - Crystal Version (UE) [!]"))
+
+
+class Hashing2(unittest.TestCase):
+    def test_lynx_and_7800_headers(self):
+        body = b"z" * 2048
+        self.assertIn(hashlib.md5(body).hexdigest(), m.md5s(b"LYNX" + b"\0" * 60 + body, "lynx"))
+        self.assertIn(hashlib.md5(body).hexdigest(), m.md5s(b"\1ATARI7800" + b"\0" * 118 + body, "a7800"))
+
+
+class Report(unittest.TestCase):
+    def test_report_lists_reason_and_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "r.txt")
+            m.write_report(p, "me", [(42, "Some Hack", "Nintendo 64", "base ROM missing in the library")], 3)
+            txt = p.read_text()
+            self.assertIn("[Nintendo 64] Some Hack", txt)
+            self.assertIn("base ROM missing", txt)
+            self.assertIn("retroachievements.org/game/42", txt)
+
+
 if __name__ == "__main__":
     unittest.main()

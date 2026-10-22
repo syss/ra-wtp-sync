@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import io
 import json
 import os
 import re
@@ -41,10 +42,12 @@ import sqlite3
 import sys
 import time
 import tomllib
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 from pathlib import Path
 
 __version__ = "1.0.0"
@@ -52,24 +55,73 @@ __version__ = "1.0.0"
 API = "https://retroachievements.org/API/"
 USER_AGENT = f"ra-wtp-sync/{__version__} (+https://github.com/)"
 
-# name -> RA console id, folder names to look for below `src` (case-insensitive),
-# and how RA hashes that system's ROMs ("plain", "nes", "snes", "n64").
-DEFAULT_CONSOLES: dict[str, dict] = {
-    "megadrive":  {"id": 1,  "hash": "plain", "dirs": ["megadrive", "genesis", "smd", "mdrive"]},
-    "n64":        {"id": 2,  "hash": "n64",   "dirs": ["n64", "64dd"]},
-    "snes":       {"id": 3,  "hash": "snes",  "dirs": ["snes", "sfc", "sfam", "superfamicom"]},
-    "gb":         {"id": 4,  "hash": "plain", "dirs": ["gb", "gameboy"]},
-    "gba":        {"id": 5,  "hash": "plain", "dirs": ["gba", "gameboyadvance"]},
-    "gbc":        {"id": 6,  "hash": "plain", "dirs": ["gbc", "gameboycolor"]},
-    "nes":        {"id": 7,  "hash": "nes",   "dirs": ["nes", "famicom", "fds"]},
-    "pcengine":   {"id": 8,  "hash": "snes",  "dirs": ["pcengine", "turbografx", "tg16", "pce"]},
-    "mastersystem": {"id": 11, "hash": "plain", "dirs": ["mastersystem", "sms"]},
-    "gamegear":   {"id": 15, "hash": "plain", "dirs": ["gamegear", "gg"]},
-    "pokemini":   {"id": 24, "hash": "plain", "dirs": ["pokemini", "pokemon-mini"]},
-    "virtualboy": {"id": 28, "hash": "plain", "dirs": ["virtualboy", "vb"]},
-    "channelf":   {"id": 57, "hash": "plain", "dirs": ["fairchild-channel-f", "channelf"]},
-    "atari2600":  {"id": 25, "hash": "plain", "dirs": ["atari2600", "a2600"]},
+# RA console id -> (short key, hash style, extra folder names looked up below `src`).
+# Hash styles: plain | nes | fds | snes | n64 | lynx | a7800 describe how RA hashes the ROM file;
+# "name" is used for discs and other complex formats that RA hashes in its own way: those games
+# are matched by title (or an "[RA 1234]" tag in the file name) instead, which is less strict.
+# Consoles not listed here are still available under a key made from their RA name.
+KNOWN_CONSOLES: dict[int, tuple[str, str, list[str]]] = {
+    1: ("megadrive", "plain", ["genesis", "smd", "mdrive"]),
+    2: ("n64", "n64", ["64dd"]),
+    3: ("snes", "snes", ["sfc", "sfam", "superfamicom"]),
+    4: ("gb", "plain", ["gameboy"]),
+    5: ("gba", "plain", ["gameboyadvance"]),
+    6: ("gbc", "plain", ["gameboycolor"]),
+    7: ("nes", "nes", ["famicom"]),
+    8: ("pcengine", "snes", ["turbografx", "tg16", "pce"]),
+    9: ("segacd", "name", ["megacd", "scd"]),
+    10: ("32x", "plain", ["sega32x"]),
+    11: ("mastersystem", "plain", ["sms"]),
+    12: ("psx", "name", ["ps1", "playstation", "psone"]),
+    13: ("lynx", "lynx", ["atarilynx"]),
+    14: ("ngp", "plain", ["ngpc", "neogeopocket", "neogeopocketcolor"]),
+    15: ("gamegear", "plain", ["gg"]),
+    16: ("gamecube", "name", ["gc", "ngc"]),
+    17: ("jaguar", "plain", ["atarijaguar"]),
+    18: ("nds", "name", ["ds"]),
+    19: ("wii", "name", []),
+    21: ("ps2", "name", ["playstation2"]),
+    23: ("odyssey2", "plain", ["videopac"]),
+    24: ("pokemini", "plain", []),
+    25: ("atari2600", "plain", ["a2600"]),
+    27: ("arcade", "name", ["mame", "fba", "fbneo"]),
+    28: ("virtualboy", "plain", ["vb"]),
+    33: ("sg1000", "plain", ["sg"]),
+    39: ("saturn", "name", ["segasaturn"]),
+    40: ("dreamcast", "name", ["dc"]),
+    41: ("psp", "name", ["playstationportable"]),
+    43: ("3do", "name", []),
+    44: ("colecovision", "plain", ["coleco"]),
+    49: ("pcfx", "name", []),
+    51: ("atari7800", "a7800", []),
+    53: ("wonderswan", "plain", ["ws", "wsc", "wonderswancolor"]),
+    56: ("neogeocd", "name", []),
+    57: ("channelf", "plain", []),
+    62: ("3ds", "name", ["n3ds"]),
+    63: ("supervision", "plain", []),
+    76: ("pcenginecd", "name", ["tgcd", "turbografxcd"]),
+    77: ("jaguarcd", "name", []),
+    78: ("dsi", "name", ["nintendodsi"]),
+    81: ("fds", "fds", ["famicomdisksystem"]),
 }
+# Used when the RA console list cannot be fetched (offline).
+FALLBACK_CONSOLES = {
+    1: "Genesis/Mega Drive", 2: "Nintendo 64", 3: "SNES/Super Famicom", 4: "Game Boy",
+    5: "Game Boy Advance", 6: "Game Boy Color", 7: "NES/Famicom", 8: "PC Engine/TurboGrafx-16",
+    9: "Sega CD", 10: "32X", 11: "Master System", 12: "PlayStation", 13: "Atari Lynx",
+    14: "Neo Geo Pocket", 15: "Game Gear", 16: "GameCube", 17: "Atari Jaguar", 18: "Nintendo DS",
+    19: "Wii", 21: "PlayStation 2", 23: "Magnavox Odyssey 2", 24: "Pokemon Mini", 25: "Atari 2600",
+    27: "Arcade", 28: "Virtual Boy", 29: "MSX", 33: "SG-1000", 37: "Amstrad CPC", 38: "Apple II",
+    39: "Saturn", 40: "Dreamcast", 41: "PlayStation Portable", 43: "3DO Interactive Multiplayer",
+    44: "ColecoVision", 45: "Intellivision", 46: "Vectrex", 47: "PC-8000/8800", 49: "PC-FX",
+    51: "Atari 7800", 53: "WonderSwan", 56: "Neo Geo CD", 57: "Fairchild Channel F",
+    63: "Watara Supervision", 69: "Mega Duck", 71: "Arduboy", 72: "WASM-4", 73: "Arcadia 2001",
+    74: "Interton VC 4000", 75: "Elektor TV Games Computer", 76: "PC Engine CD/TurboGrafx-CD",
+    77: "Atari Jaguar CD", 78: "Nintendo DSi", 80: "Uzebox", 81: "Famicom Disk System",
+}
+# Selected when the config does not say otherwise: cartridge based systems with small ROMs.
+DEFAULT_CONSOLES = ["n64", "snes", "nes", "gb", "gbc", "gba", "megadrive", "mastersystem",
+                    "gamegear", "pcengine", "pokemini", "virtualboy", "channelf", "atari2600"]
 
 DEFAULTS = {
     "username": "",
@@ -79,10 +131,14 @@ DEFAULTS = {
     "state_dir": "~/.local/state/ra-wtp-sync",
     "saves": [],
     "include_started": False,
-    "consoles": list(DEFAULT_CONSOLES),
+    "consoles": list(DEFAULT_CONSOLES),   # keys, RA ids, or ["all"]
+    "exclude_consoles": [],
+    "report_file": "",       # missing-ROMs report (default: <state_dir>/missing-roms.txt)
     "max_rom_mb": 200,
     "hash_cache_days": 7,
     "min_list_fraction": 0.5,
+    "build_patches": True,   # build missing hacks from RA's official patches
+    "patched_dir": "",       # where built ROMs are kept (default: <state_dir>/patched)
     "preferences": {
         # Earlier entries win. Choose from: save, qol, language, region, revision
         "order": ["save", "qol", "language", "region", "revision"],
@@ -153,18 +209,65 @@ def load_config(args) -> dict:
         cfg["consoles"] = [c.strip() for c in args.consoles.split(",") if c.strip()]
     if args.include_started:
         cfg["include_started"] = True
+    if args.exclude:
+        cfg["exclude_consoles"] = [c.strip() for c in args.exclude.split(",") if c.strip()]
+    if args.no_patches:
+        cfg["build_patches"] = False
     return cfg
 
 
-def console_table(cfg) -> dict:
-    """Default consoles overlaid with [consoles.<name>] tables from the config."""
-    table = json.loads(json.dumps(DEFAULT_CONSOLES))
+def slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def build_console_table(names: dict[int, str]) -> dict[str, dict]:
+    """{key: {id, hash, dirs, label}} for every RA console."""
+    table: dict[str, dict] = {}
+    for cid, label in sorted(names.items()):
+        key, style, alias = KNOWN_CONSOLES.get(cid, (slug(label), "plain", []))
+        table[key] = {"id": cid, "hash": style, "label": label,
+                      "dirs": list(dict.fromkeys([key, slug(label), *alias]))}
+    return table
+
+
+def select_consoles(table: dict[str, dict], cfg: dict) -> dict[str, dict]:
+    """Apply [console_overrides], `consoles` (keys, ids or "all") and `exclude_consoles`."""
+    table = json.loads(json.dumps(table))
     for name, over in (cfg.get("console_overrides") or {}).items():
-        table[name] = deep_merge(table.get(name, {"hash": "plain", "dirs": [name]}), over)
-    for name in cfg["consoles"]:
-        if name not in table or "id" not in table[name]:
-            sys.exit(f"unknown console '{name}' - define it as [console_overrides.{name}] with id/dirs/hash")
-    return {n: table[n] for n in cfg["consoles"]}
+        table[name] = deep_merge(table.get(name, {"hash": "plain", "dirs": [name], "label": name}), over)
+    by_id = {str(v["id"]): k for k, v in table.items() if "id" in v}
+
+    def resolve(item) -> list[str]:
+        item = str(item)
+        if item.lower() == "all":
+            return list(table)
+        if item in table:
+            return [item]
+        if item in by_id:
+            return [by_id[item]]
+        sys.exit(f"unknown console '{item}' (see --list-consoles, or define [console_overrides.{item}])")
+
+    chosen = [k for item in cfg["consoles"] for k in resolve(item)]
+    skip = {k for item in cfg.get("exclude_consoles", []) for k in resolve(item)}
+    return {k: table[k] for k in dict.fromkeys(chosen) if k not in skip and "id" in table[k]}
+
+
+def console_names(key: str | None, state: Path | None, ttl_days: float = 30) -> dict[int, str]:
+    """RA console id -> name: live from the API (cached), else the built-in list."""
+    cache = (state / "consoles.json") if state else None
+    if cache and cache.exists() and time.time() - cache.stat().st_mtime < ttl_days * 86400:
+        return {int(k): v for k, v in json.loads(cache.read_text()).items()}
+    if key:
+        try:
+            r = api("API_GetConsoleIDs.php", key, a=1, g=1)
+            names = {int(c["ID"]): c["Name"] for c in r if c.get("IsGameSystem", True)}
+            if names and cache:
+                cache.write_text(json.dumps(names))
+            if names:
+                return names
+        except (RuntimeError, TypeError, KeyError):
+            pass
+    return dict(FALLBACK_CONSOLES)
 
 
 # --------------------------------------------------------------------------- RA API
@@ -209,8 +312,12 @@ def fetch_games(key, user, include_started) -> dict[int, tuple[str, int]]:
 def md5s(data: bytes, style: str) -> set[str]:
     """MD5s RetroAchievements could have registered for this ROM image."""
     out = {hashlib.md5(data).hexdigest()}
-    if style == "nes" and data[:4] == b"NES\x1a":
+    if style in ("nes", "fds") and data[:4] in (b"NES\x1a", b"FDS\x1a"):
         out.add(hashlib.md5(data[16:]).hexdigest())
+    elif style == "lynx" and data[:4] == b"LYNX":
+        out.add(hashlib.md5(data[64:]).hexdigest())
+    elif style == "a7800" and data[1:10] == b"ATARI7800":
+        out.add(hashlib.md5(data[128:]).hexdigest())
     elif style == "snes" and len(data) % 1024 == 512:
         out.add(hashlib.md5(data[512:]).hexdigest())
     elif style == "n64":
@@ -246,20 +353,20 @@ def file_hashes(path: str, style: str, max_bytes: int) -> set[str]:
 def open_db(state: Path) -> sqlite3.Connection:
     db = sqlite3.connect(state / "cache.db")
     db.execute("create table if not exists files(path text primary key, size int, mtime real, hashes text)")
-    db.execute("create table if not exists ghash(id int primary key, fetched real, hashes text)")
+    db.execute("create table if not exists ghash2(id int primary key, fetched real, entries text)")
     return db
 
 
 def find_dirs(src: Path, names: list[str]) -> list[Path]:
-    wanted = {n.lower() for n in names}
-    return [p for p in sorted(src.iterdir()) if p.is_dir() and p.name.lower() in wanted]
+    wanted = {slug(n) for n in names}
+    return [p for p in sorted(src.iterdir()) if p.is_dir() and slug(p.name) in wanted]
 
 
-def index_console(db, src: Path, spec: dict, max_bytes: int) -> dict[str, list[str]]:
+def index_console(db, src: Path, spec: dict, max_bytes: int, extra_roots=()) -> dict[str, list[str]]:
     """{md5: [paths]} for every ROM of one system; hashes are cached by size+mtime."""
     idx: dict[str, list[str]] = {}
     fresh = 0
-    for root in find_dirs(src, spec["dirs"]):
+    for root in [*find_dirs(src, spec["dirs"]), *[r for r in extra_roots if Path(r).is_dir()]]:
         for dp, _, fns in os.walk(root):
             for fn in fns:
                 if fn.startswith(".") or fn.lower().endswith(SKIP_EXT):
@@ -287,16 +394,45 @@ def index_console(db, src: Path, spec: dict, max_bytes: int) -> dict[str, list[s
     return idx
 
 
-def game_hashes(db, key, gid: int, ttl_days: float) -> set[str]:
-    row = db.execute("select fetched,hashes from ghash where id=?", (gid,)).fetchone()
+def game_entries(db, key, gid: int, ttl_days: float) -> list[dict]:
+    """RA hash entries of a game: [{'MD5': ..., 'PatchUrl': ...}, ...] (cached)."""
+    row = db.execute("select fetched,entries from ghash2 where id=?", (gid,)).fetchone()
     if row and time.time() - row[0] < ttl_days * 86400:
-        return set(json.loads(row[1]))
+        return json.loads(row[1])
     r = api("API_GetGameHashes.php", key, i=gid)
-    hs = [h["MD5"].lower() for h in r.get("Results", [])]
-    db.execute("insert or replace into ghash values(?,?,?)", (gid, time.time(), json.dumps(hs)))
+    ents = [{"MD5": h["MD5"].lower(), "PatchUrl": h.get("PatchUrl"), "Name": h.get("Name")}
+            for h in r.get("Results", [])]
+    db.execute("insert or replace into ghash2 values(?,?,?)", (gid, time.time(), json.dumps(ents)))
     db.commit()
     time.sleep(0.3)  # be polite to the API
-    return set(hs)
+    return ents
+
+
+NAME_SKIP_EXT = (".bin", ".cue", ".sub", ".ccd", ".img", ".mds", ".m3u")
+
+
+def norm_title(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
+    text = re.sub(r"^(~[^~]*~\s*)+", "", text)
+    text = re.sub(r"\(.*?\)|\[.*?\]", "", text)
+    text = re.sub(r"\b(the|a)\b", "", text)
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def index_names(src: Path, spec: dict, extra_roots=()) -> dict[str, list[str]]:
+    """{normalised title: [paths]} for systems matched by name (no content hashing)."""
+    idx: dict[str, list[str]] = {}
+    for root in [*find_dirs(src, spec["dirs"]), *[r for r in extra_roots if Path(r).is_dir()]]:
+        for dp, _, fns in os.walk(root):
+            for fn in fns:
+                if fn.startswith(".") or fn.lower().endswith(SKIP_EXT + NAME_SKIP_EXT):
+                    continue
+                p = os.path.join(dp, fn)
+                idx.setdefault(norm_title(stem(fn)), []).append(p)
+                m = re.search(r"\[RA (\d+)\]", fn)
+                if m:
+                    idx.setdefault(f"ra:{m.group(1)}", []).append(p)
+    return idx
 
 
 # --------------------------------------------------------------------------- choosing a ROM
@@ -348,6 +484,231 @@ def load_saves(dirs: list[str]) -> set[str]:
     return names
 
 
+# --------------------------------------------------------------------------- patching
+PATCH_HOST = "https://github.com/RetroAchievements/RAPatches/"
+MAX_PATCH_BYTES = 100 * 1024 * 1024
+PATCH_EXT = (".ips", ".bps", ".ups")
+
+
+def _varint(p: bytes, i: int) -> tuple[int, int]:
+    """BPS/UPS variable length number."""
+    v, shift = 0, 1
+    while True:
+        x = p[i]
+        i += 1
+        v += (x & 0x7F) * shift
+        if x & 0x80:
+            return v, i
+        shift <<= 7
+        v += shift
+
+
+def apply_ips(src: bytes, p: bytes) -> bytes:
+    if p[:5] != b"PATCH":
+        raise ValueError("not an IPS patch")
+    out = bytearray(src)
+    i = 5
+    while p[i:i + 3] != b"EOF":
+        off = int.from_bytes(p[i:i + 3], "big")
+        size = int.from_bytes(p[i + 3:i + 5], "big")
+        i += 5
+        if size == 0:  # RLE record
+            size = int.from_bytes(p[i:i + 2], "big")
+            data = p[i + 2:i + 3] * size
+            i += 3
+        else:
+            data = p[i:i + size]
+            i += size
+        if off + len(data) > len(out):
+            out.extend(b"\0" * (off + len(data) - len(out)))
+        out[off:off + len(data)] = data
+    i += 3
+    if len(p) - i == 3:  # optional truncate length
+        del out[int.from_bytes(p[i:i + 3], "big"):]
+    return bytes(out)
+
+
+def bps_header(p: bytes) -> tuple[int, int, int]:
+    """(source size, source crc32, header end offset) of a BPS patch."""
+    if p[:4] != b"BPS1":
+        raise ValueError("not a BPS patch")
+    ssz, i = _varint(p, 4)
+    return ssz, int.from_bytes(p[-12:-8], "little"), i
+
+
+def apply_bps(src: bytes, p: bytes) -> bytes:
+    ssz, scrc, i = bps_header(p)
+    tsz, i = _varint(p, i)
+    msz, i = _varint(p, i)
+    i += msz
+    if len(src) != ssz or zlib.crc32(src) != scrc:
+        raise ValueError("patch is for a different base ROM")
+    out = bytearray(tsz)
+    o = srel = trel = 0
+    end = len(p) - 12
+    while i < end:
+        d, i = _varint(p, i)
+        act, n = d & 3, (d >> 2) + 1
+        if act == 0:
+            out[o:o + n] = src[o:o + n]
+        elif act == 1:
+            out[o:o + n] = p[i:i + n]
+            i += n
+        elif act == 2:
+            v, i = _varint(p, i)
+            srel += -(v >> 1) if v & 1 else v >> 1
+            out[o:o + n] = src[srel:srel + n]
+            srel += n
+        else:
+            v, i = _varint(p, i)
+            trel += -(v >> 1) if v & 1 else v >> 1
+            for k in range(n):  # may overlap, copy byte by byte
+                out[o + k] = out[trel + k]
+            trel += n
+        o += n
+    return bytes(out)
+
+
+def apply_ups(src: bytes, p: bytes) -> bytes:
+    if p[:4] != b"UPS1":
+        raise ValueError("not a UPS patch")
+    isz, i = _varint(p, 4)
+    osz, i = _varint(p, i)
+    if zlib.crc32(src) != int.from_bytes(p[-12:-8], "little"):
+        raise ValueError("patch is for a different base ROM")
+    out = bytearray(src[:osz].ljust(osz, b"\0"))
+    pos, end = 0, len(p) - 12
+    while i < end:
+        skip, i = _varint(p, i)
+        pos += skip
+        while p[i]:
+            out[pos] ^= p[i]
+            pos += 1
+            i += 1
+        i += 1
+        pos += 1
+    return bytes(out)
+
+
+APPLY = {".ips": apply_ips, ".bps": apply_bps, ".ups": apply_ups}
+
+
+def fetch_patch_zip(url: str, cache: Path) -> bytes | None:
+    """Download an official RAPatches zip (cached). Only the RAPatches repo is accepted."""
+    if not url.startswith(PATCH_HOST):
+        log("  refusing patch URL outside RAPatches:", url)
+        return None
+    f = cache / re.sub(r"[^A-Za-z0-9._-]", "_", url.rsplit("/", 1)[-1])
+    if f.exists():
+        return f.read_bytes()
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            data = r.read(MAX_PATCH_BYTES + 1)
+    except (urllib.error.URLError, TimeoutError) as e:
+        log("  patch download failed:", url, e)
+        return None
+    if len(data) > MAX_PATCH_BYTES:
+        return None
+    cache.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(data)
+    return data
+
+
+def patches_in_zip(data: bytes) -> list[tuple[str, bytes]]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            return [(i.filename, z.read(i)) for i in z.infolist()
+                    if i.filename.lower().endswith(PATCH_EXT) and i.file_size < MAX_PATCH_BYTES]
+    except zipfile.BadZipFile:
+        return []
+
+
+def rom_blobs(path: str, max_bytes: int):
+    """Yield (display name, bytes) for the ROM image(s) in a library file."""
+    try:
+        if path.lower().endswith(".zip"):
+            with zipfile.ZipFile(path) as z:
+                for i in z.infolist():
+                    if not i.is_dir() and not i.filename.lower().endswith(SKIP_EXT) and 1000 < i.file_size < max_bytes:
+                        yield i.filename, z.read(i)
+        elif os.path.getsize(path) < max_bytes:
+            yield os.path.basename(path), Path(path).read_bytes()
+    except Exception:
+        return
+
+
+def base_candidates(paths: list[str], hint: str) -> list[str]:
+    """Library files ordered by how well their name matches the patch's base game."""
+    toks = [t for t in re.split(r"[^a-z0-9]+", hint.lower()) if t]
+    def score(p):
+        n = os.path.basename(p).lower()
+        return -sum(t in n for t in toks)
+    return sorted(paths, key=lambda p: (score(p), len(p)))
+
+
+def readme_hint(data: bytes) -> str:
+    """The 'Use with: ...' text RAPatches ships next to a patch (the base ROM it needs)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            for i in z.infolist():
+                if i.filename.lower().endswith((".txt", ".md")) and i.file_size < 4096:
+                    return " ".join(z.read(i).decode("latin1").split())[:240]
+    except zipfile.BadZipFile:
+        pass
+    return ""
+
+
+def build_patched(entries: list[dict], wanted_md5: set[str], style: str, paths: list[str],
+                  max_bytes: int, cache: Path, max_tries: int = 60):
+    """Apply the official RA patch to a base ROM from the library.
+    Returns (rom bytes, extension, base path, "") on success, else (None, None, None, reason)."""
+    reasons: list[str] = []
+    for e in entries:
+        url = e.get("PatchUrl")
+        if not url:
+            continue
+        pname_url = urllib.parse.unquote(url.rsplit("/", 1)[-1])
+        if not pname_url.lower().endswith(".zip"):
+            reasons.append(f"patch format not supported ({pname_url})")
+            continue
+        zdata = fetch_patch_zip(url, cache)
+        if not zdata:
+            reasons.append(f"patch download failed ({pname_url})")
+            continue
+        patches = patches_in_zip(zdata)
+        if not patches:
+            reasons.append(f"patch format not supported (no ips/bps/ups in {pname_url})")
+            continue
+        hint = urllib.parse.unquote(url).split("/RAPatches/")[-1].rsplit("/", 1)[0].replace("/", " ")
+        tries = 0
+        for pname, pbytes in patches:
+            fn = APPLY[os.path.splitext(pname)[1].lower()]
+            for cand in base_candidates(paths, hint):
+                for bname, blob in rom_blobs(cand, max_bytes):
+                    tries += 1
+                    if tries > max_tries:
+                        break
+                    variants = [blob]
+                    if style in ("snes", "nes") and len(blob) % 1024 == 512:
+                        variants.append(blob[512:])   # some patches expect the unheadered ROM
+                    if style == "nes" and blob[:4] == b"NES\x1a":
+                        variants.append(blob[16:])
+                    for v in variants:
+                        try:
+                            res = fn(v, pbytes)
+                        except Exception:
+                            continue
+                        if md5s(res, style) & wanted_md5:
+                            return res, os.path.splitext(bname)[1] or ".bin", cand, ""
+                if tries > max_tries:
+                    break
+        need = readme_hint(zdata)
+        reasons.append("base ROM missing in the library" + (f" - patch needs: {need}" if need else
+                       f" - patch needs: {e.get('Name') or pname_url}"))
+    return None, None, None, "; ".join(dict.fromkeys(reasons)) or "no patch published"
+
+
 # --------------------------------------------------------------------------- file ops
 def safe_remove(dest: Path, rel: str) -> None:
     p = Path(os.path.realpath(dest / rel))
@@ -370,20 +731,26 @@ def copy_atomic(src: str, tgt: Path) -> None:
     os.replace(tmp, tgt)
 
 
+def write_report(path: Path, user: str, missing: list, matched: int) -> None:
+    """Human readable list of wanted games that could not be provided, with the reason."""
+    lines = [f"# Games on {user}'s RetroAchievements list that could not be provided",
+             f"# {time.strftime('%F %T')}  -  {matched} provided, {len(missing)} missing", ""]
+    for gid, title, label, reason in sorted(missing, key=lambda m: (m[2], m[1])):
+        lines += [f"[{label}] {title}", f"    why:  {reason}",
+                  f"    link: https://retroachievements.org/game/{gid}", ""]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines))
+
+
 # --------------------------------------------------------------------------- main
 def sync(cfg: dict, dry_run: bool) -> int:
     if not cfg["username"]:
         sys.exit("no RetroAchievements username (config 'username', --username or $RA_USER)")
     if not cfg["src"] or not cfg["dest"]:
         sys.exit("'src' (ROM library) and 'dest' (output folder) are required")
-    key = os.environ.get("RA_API_KEY")
+    key = get_api_key(cfg)
     if not key:
-        kf = Path(cfg["api_key_file"]).expanduser()
-        if not kf.is_absolute():
-            kf = Path(__file__).resolve().parent / kf
-        if not kf.exists():
-            sys.exit(f"no API key: set $RA_API_KEY or put it in {kf}")
-        key = kf.read_text().strip()
+        sys.exit(f"no API key: set $RA_API_KEY or put it in {cfg['api_key_file']}")
 
     src, dest = Path(cfg["src"]).expanduser().resolve(), Path(cfg["dest"]).expanduser().resolve()
     if dest == src or src in dest.parents or dest in src.parents:
@@ -398,7 +765,7 @@ def sync(cfg: dict, dry_run: bool) -> int:
     except BlockingIOError:
         sys.exit("another run is in progress")
 
-    table = console_table(cfg)
+    table = select_consoles(build_console_table(console_names(key, state)), cfg)
     by_id = {spec["id"]: name for name, spec in table.items()}
     max_bytes = int(cfg["max_rom_mb"]) * 1024 * 1024
     mf_path = state / "manifest.json"
@@ -415,18 +782,55 @@ def sync(cfg: dict, dry_run: bool) -> int:
     if cfg["saves"]:
         log(f"{len(saved)} save files found for ROM preference")
     db = open_db(state)
+    patched_dir = Path(cfg["patched_dir"] or state / "patched").expanduser()
+    fail_path = state / "patch-failed.json"
+    failed: dict = json.loads(fail_path.read_text()) if fail_path.exists() else {}
+    failed = {k: v for k, v in failed.items() if isinstance(v, dict)}   # drop pre-1.0 float entries
     indexes: dict[int, dict] = {}
     plan: dict[str, tuple[str, str, str]] = {}
-    missing: list[tuple[int, str, str]] = []
+    missing: list[tuple[int, str, str, str]] = []   # (id, title, console, reason)
     for gid, (title, cid) in sorted(wanted.items()):
-        name = by_id[cid]
-        hs = game_hashes(db, key, gid, cfg["hash_cache_days"])
-        if cid not in indexes:
-            log("indexing", name)
-            indexes[cid] = index_console(db, src, table[name], max_bytes)
-        cands = {p for h in hs for p in indexes[cid].get(h, [])}
+        name, spec = by_id[cid], table[by_id[cid]]
+        reason = "not in the library"
+        if spec["hash"] == "name":                  # discs etc.: match by title
+            if cid not in indexes:
+                log("indexing", name, "(by title)")
+                indexes[cid] = index_names(src, spec, [patched_dir / name])
+            cands = set(indexes[cid].get(norm_title(title), [])) | set(indexes[cid].get(f"ra:{gid}", []))
+        else:
+            ents = game_entries(db, key, gid, cfg["hash_cache_days"])
+            hs = {e["MD5"] for e in ents}
+            if cid not in indexes:
+                log("indexing", name)
+                indexes[cid] = index_console(db, src, spec, max_bytes, [patched_dir / name])
+            cands = {p for h in hs for p in indexes[cid].get(h, [])}
+            if not cands and cfg["build_patches"] and any(e["PatchUrl"] for e in ents):
+                if time.time() - failed.get(str(gid), {}).get("t", 0) < cfg["hash_cache_days"] * 86400:
+                    reason = failed[str(gid)]["why"] + " (retrying later)"
+                elif dry_run:
+                    reason = "an official patch exists (not tried in a dry run)"
+                    log("WOULD BUILD from patch:", title)
+                else:
+                    log("BUILD", title)
+                    paths = [p for lst in indexes[cid].values() for p in lst]
+                    paths = list(dict.fromkeys(p for p in paths if not p.startswith(str(patched_dir))))
+                    data, ext, base, why = build_patched(ents, hs, spec["hash"], paths, max_bytes, state / "patch-cache")
+                    if data:
+                        safe = re.sub(r'[\\/:*?"<>|]+', " -", title).strip()
+                        out = patched_dir / name / f"{safe} [RA {gid}]{ext}"
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        out.write_bytes(data)
+                        log(f"  built {out.name} from {os.path.basename(base)}")
+                        cands = {str(out)}
+                        indexes[cid].setdefault(next(iter(hs & md5s(data, spec["hash"]))), []).append(str(out))
+                    else:
+                        log("  cannot build:", why)
+                        reason = why
+                        failed[str(gid)] = {"t": time.time(), "why": why}
+            elif not cands and not any(e["PatchUrl"] for e in ents):
+                reason = "not in the library, and RA publishes no patch for it"
         if not cands:
-            missing.append((gid, title, name))
+            missing.append((gid, title, spec["label"], reason))
             continue
         plan[str(gid)] = (title, name, min(cands, key=lambda p: rank(p, saved, cfg["preferences"])))
 
@@ -449,12 +853,34 @@ def sync(cfg: dict, dry_run: bool) -> int:
             safe_remove(dest, manifest[gid]["file"])
         manifest.pop(gid)
 
+    report = Path(cfg["report_file"] or state / "missing-roms.txt").expanduser()
+    write_report(report, cfg["username"], missing, len(plan))
     if not dry_run:
+        fail_path.write_text(json.dumps(failed))
         mf_path.write_text(json.dumps(manifest, indent=1))
-        (state / "not-in-library.txt").write_text(
-            "".join(f"{gid}\t{c}\t{t}\n" for gid, t, c in missing))
-    log(f"done: {len(plan)} matched, {len(missing)} not in library"
-        + ("" if dry_run else f" (list: {state / 'not-in-library.txt'})"))
+    log(f"done: {len(plan)} matched, {len(missing)} missing - list with reasons: {report}")
+    return 0
+
+
+def get_api_key(cfg: dict) -> str | None:
+    key = os.environ.get("RA_API_KEY")
+    if not key:
+        kf = Path(cfg["api_key_file"]).expanduser()
+        kf = kf if kf.is_absolute() else Path(__file__).resolve().parent / kf
+        key = kf.read_text().strip() if kf.exists() else None
+    return key
+
+
+def list_consoles(cfg: dict) -> int:
+    state = Path(cfg["state_dir"]).expanduser()
+    state.mkdir(parents=True, exist_ok=True)
+    table = build_console_table(console_names(get_api_key(cfg), state))
+    chosen = select_consoles(table, cfg)
+    print(f"{'':2}{'key':<16}{'id':>4}  {'matching':<9} name")
+    for k, v in table.items():
+        how = "title" if v["hash"] == "name" else "hash"
+        print(f"{'*' if k in chosen else ' ':2}{k:<16}{v['id']:>4}  {how:<9} {v['label']}")
+    print("\n* = selected by the current configuration")
     return 0
 
 
@@ -467,8 +893,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dest", help="output folder (e.g. your Syncthing folder)")
     ap.add_argument("--state-dir", dest="state_dir", help="cache + manifest location")
     ap.add_argument("--saves", nargs="*", help="save folders; a ROM that already has a save here is preferred")
-    ap.add_argument("--consoles", help="comma separated console names, e.g. n64,snes,gba")
+    ap.add_argument("--consoles", help="comma separated console keys/ids, or \"all\" (see --list-consoles)")
+    ap.add_argument("--exclude", help="comma separated consoles to leave out (after --consoles/config)")
+    ap.add_argument("--list-consoles", action="store_true", help="show all available consoles and exit")
     ap.add_argument("--include-started", action="store_true", help="also keep games you started but have not beaten")
+    ap.add_argument("--no-patches", action="store_true", help="do not build missing hacks from RA patches")
     ap.add_argument("-n", "--dry-run", action="store_true", help="show what would change, change nothing")
     ap.add_argument("--version", action="version", version=__version__)
     return ap
@@ -477,6 +906,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config(args)
+    if args.list_consoles:
+        return list_consoles(cfg)
     return sync(cfg, args.dry_run)
 
 

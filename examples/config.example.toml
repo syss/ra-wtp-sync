@@ -27,10 +27,23 @@ saves = []
 # Also keep games you started but have not beaten yet (default: only Want to Play).
 include_started = false
 
-# Systems to handle. Skip the ones with huge ROMs (disc based systems are not
-# supported anyway). Available: megadrive n64 snes gb gba gbc nes pcengine
-# mastersystem gamegear pokemini virtualboy channelf atari2600
+# Systems to handle: keys, RetroAchievements console ids, or ["all"]. List them with
+#   ./ra_wtp_sync.py --list-consoles
+# Cartridge systems are matched by RA hash. Disc based and other systems (psx, ps2, gamecube,
+# wii, nds, 3ds, saturn, dreamcast, psp, arcade, ...) are matched by game title instead, and
+# their files can be very large - select them deliberately.
 consoles = ["n64", "snes", "nes", "gb", "gbc", "gba", "megadrive", "mastersystem"]
+# Handy with "all": leave some out.
+exclude_consoles = []
+
+# Missing-ROMs report: every game on your list that could not be provided, with the reason
+# (not in the library / patch needs a base ROM you lack / unsupported patch format ...).
+# report_file = "/path/to/missing-roms.txt"   # default: <state_dir>/missing-roms.txt
+
+# Build missing hacks from RetroAchievements' official patches (RAPatches repo; IPS/BPS/UPS)
+# using base ROMs from your library. Built ROMs are kept in patched_dir.
+build_patches = true
+# patched_dir = "/path/to/patched"            # default: <state_dir>/patched
 
 # Skip ROM files larger than this (MB) while hashing.
 max_rom_mb = 200
