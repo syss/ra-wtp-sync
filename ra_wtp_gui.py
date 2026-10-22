@@ -79,7 +79,7 @@ class State:
     def load(self) -> dict:
         cfg = json.loads(json.dumps(core.DEFAULTS))
         if self.config.exists():
-            cfg = core.deep_merge(cfg, tomllib.loads(self.config.read_text()))
+            cfg = core.deep_merge(cfg, tomllib.loads(self.config.read_text(encoding="utf-8")))
         return cfg
 
     def key_file(self, cfg: dict) -> Path:
@@ -88,7 +88,7 @@ class State:
 
     def api_key(self, cfg: dict) -> str | None:
         kf = self.key_file(cfg)
-        return kf.read_text().strip() if kf.exists() else None
+        return kf.read_text(encoding="utf-8").strip() if kf.exists() else None
 
     def payload(self) -> dict:
         cfg = self.load()
@@ -118,13 +118,13 @@ class State:
             kf.parent.mkdir(parents=True, exist_ok=True)
             kf.touch(mode=0o600)
             kf.chmod(0o600)
-            kf.write_text(key)
+            kf.write_text(key, encoding="utf-8")
         # only write what differs from the built-in defaults
         out = {k: v for k, v in cfg.items() if k == "preferences" or v != core.DEFAULTS.get(k) or k in ("username", "src", "dest")}
         self.config.parent.mkdir(parents=True, exist_ok=True)
         self.config.touch(mode=0o600)
         self.config.chmod(0o600)
-        self.config.write_text("# Written by ra_wtp_gui.py - edit freely\n" + dump_toml(out))
+        self.config.write_text("# Written by ra_wtp_gui.py - edit freely\n" + dump_toml(out), encoding="utf-8")
 
     def run(self, dry: bool) -> bool:
         with self.lock:
@@ -146,7 +146,7 @@ class State:
     def report(self) -> str:
         cfg = self.load()
         p = Path(cfg["report_file"] or Path(cfg["state_dir"]).expanduser() / "missing-roms.txt").expanduser()
-        return p.read_text() if p.exists() else "(no report yet - run a dry run first)"
+        return p.read_text(encoding="utf-8") if p.exists() else "(no report yet - run a dry run first)"
 
 
 def make_handler(st: State, port: int):

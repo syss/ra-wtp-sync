@@ -31,7 +31,6 @@ Standard library only; Python 3.11+.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import io
 import json
@@ -39,6 +38,7 @@ import os
 import re
 import shutil
 import sqlite3
+import ssl
 import sys
 import time
 import tomllib
@@ -123,12 +123,31 @@ FALLBACK_CONSOLES = {
 DEFAULT_CONSOLES = ["n64", "snes", "nes", "gb", "gbc", "gba", "megadrive", "mastersystem",
                     "gamegear", "pcengine", "pokemini", "virtualboy", "channelf", "atari2600"]
 
+def _config_dir() -> Path:
+    """Per-user config folder: XDG on Linux, Application Support on macOS, %APPDATA% on Windows."""
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "ra-wtp-sync"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "ra-wtp-sync"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ra-wtp-sync"
+
+
+def _state_dir() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "ra-wtp-sync"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "ra-wtp-sync" / "state"
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "ra-wtp-sync"
+
+
+CONFIG_DIR, STATE_DIR = _config_dir(), _state_dir()
+
 DEFAULTS = {
     "username": "",
-    "api_key_file": "~/.config/ra-wtp-sync/api_key",
+    "api_key_file": str(CONFIG_DIR / "api_key"),
     "src": "",
     "dest": "",
-    "state_dir": "~/.local/state/ra-wtp-sync",
+    "state_dir": str(STATE_DIR),
     "saves": [],
     "include_started": False,
     "consoles": list(DEFAULT_CONSOLES),   # keys, RA ids, or ["all"]
@@ -170,8 +189,33 @@ REGIONS = {
 }
 
 
+class FileLock:
+    """Exclusive lock so two runs (cron + manual) never overlap; works on Linux, macOS and Windows."""
+
+    def __init__(self, path: Path):
+        self.path, self.f = path, None
+
+    def acquire(self) -> bool:
+        self.f = open(self.path, "a+")
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                self.f.seek(0)
+                if not self.f.read(1):
+                    self.f.write("0")
+                    self.f.flush()
+                self.f.seek(0)
+                msvcrt.locking(self.f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+
 def log(*a):
-    print(time.strftime("%F %T"), *a, flush=True)
+    print(time.strftime("%Y-%m-%d %H:%M:%S"), *a, flush=True)
 
 
 # --------------------------------------------------------------------------- config
@@ -188,7 +232,7 @@ def load_config(args) -> dict:
     # first existing wins: explicit, config.toml next to the script (git-ignored), user config dir
     candidates = [Path(explicit).expanduser()] if explicit else [
         Path(__file__).resolve().parent / "config.toml",
-        Path("~/.config/ra-wtp-sync/config.toml").expanduser(),
+        CONFIG_DIR / "config.toml",
     ]
     path = next((p for p in candidates if p.exists()), None)
     if path:
@@ -256,13 +300,13 @@ def console_names(key: str | None, state: Path | None, ttl_days: float = 30) -> 
     """RA console id -> name: live from the API (cached), else the built-in list."""
     cache = (state / "consoles.json") if state else None
     if cache and cache.exists() and time.time() - cache.stat().st_mtime < ttl_days * 86400:
-        return {int(k): v for k, v in json.loads(cache.read_text()).items()}
+        return {int(k): v for k, v in json.loads(cache.read_text(encoding="utf-8")).items()}
     if key:
         try:
             r = api("API_GetConsoleIDs.php", key, a=1, g=1)
             names = {int(c["ID"]): c["Name"] for c in r if c.get("IsGameSystem", True)}
             if names and cache:
-                cache.write_text(json.dumps(names))
+                cache.write_text(json.dumps(names), encoding="utf-8")
             if names:
                 return names
         except (RuntimeError, TypeError, KeyError):
@@ -282,7 +326,10 @@ def api(endpoint: str, key: str, **params):
             if e.code in (401, 403):
                 sys.exit(f"RetroAchievements rejected the request (HTTP {e.code}): check username / API key")
             time.sleep(2 * (attempt + 1))
-        except (urllib.error.URLError, ValueError, TimeoutError):
+        except (urllib.error.URLError, ValueError, TimeoutError) as e:
+            if isinstance(getattr(e, "reason", None), ssl.SSLCertVerificationError):
+                sys.exit("TLS certificate check failed. On macOS run 'Install Certificates.command' "
+                         "from your Python folder (or: pip install certifi), then retry.")
             time.sleep(2 * (attempt + 1))
     raise RuntimeError(f"RA API call failed: {endpoint}")
 
@@ -437,7 +484,7 @@ def index_names(src: Path, spec: dict, extra_roots=()) -> dict[str, list[str]]:
 
 # --------------------------------------------------------------------------- choosing a ROM
 def stem(name: str) -> str:
-    return os.path.splitext(name)[0]
+    return unicodedata.normalize("NFC", os.path.splitext(name)[0])
 
 
 def revision(name: str) -> float:
@@ -734,12 +781,12 @@ def copy_atomic(src: str, tgt: Path) -> None:
 def write_report(path: Path, user: str, missing: list, matched: int) -> None:
     """Human readable list of wanted games that could not be provided, with the reason."""
     lines = [f"# Games on {user}'s RetroAchievements list that could not be provided",
-             f"# {time.strftime('%F %T')}  -  {matched} provided, {len(missing)} missing", ""]
+             f"# {time.strftime('%Y-%m-%d %H:%M:%S')}  -  {matched} provided, {len(missing)} missing", ""]
     for gid, title, label, reason in sorted(missing, key=lambda m: (m[2], m[1])):
         lines += [f"[{label}] {title}", f"    why:  {reason}",
                   f"    link: https://retroachievements.org/game/{gid}", ""]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- main
@@ -759,17 +806,15 @@ def sync(cfg: dict, dry_run: bool) -> int:
         sys.exit(f"src is not a directory: {src}")
     state = Path(cfg["state_dir"]).expanduser()
     state.mkdir(parents=True, exist_ok=True)
-    lock = open(state / "lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    lock = FileLock(state / "lock")
+    if not lock.acquire():
         sys.exit("another run is in progress")
 
     table = select_consoles(build_console_table(console_names(key, state)), cfg)
     by_id = {spec["id"]: name for name, spec in table.items()}
     max_bytes = int(cfg["max_rom_mb"]) * 1024 * 1024
     mf_path = state / "manifest.json"
-    manifest: dict = json.loads(mf_path.read_text()) if mf_path.exists() else {}
+    manifest: dict = json.loads(mf_path.read_text(encoding="utf-8")) if mf_path.exists() else {}
 
     games = fetch_games(key, cfg["username"], cfg["include_started"])
     wanted = {i: v for i, v in games.items() if v[1] in by_id}
@@ -784,7 +829,7 @@ def sync(cfg: dict, dry_run: bool) -> int:
     db = open_db(state)
     patched_dir = Path(cfg["patched_dir"] or state / "patched").expanduser()
     fail_path = state / "patch-failed.json"
-    failed: dict = json.loads(fail_path.read_text()) if fail_path.exists() else {}
+    failed: dict = json.loads(fail_path.read_text(encoding="utf-8")) if fail_path.exists() else {}
     failed = {k: v for k, v in failed.items() if isinstance(v, dict)}   # drop pre-1.0 float entries
     indexes: dict[int, dict] = {}
     plan: dict[str, tuple[str, str, str]] = {}
@@ -856,8 +901,8 @@ def sync(cfg: dict, dry_run: bool) -> int:
     report = Path(cfg["report_file"] or state / "missing-roms.txt").expanduser()
     write_report(report, cfg["username"], missing, len(plan))
     if not dry_run:
-        fail_path.write_text(json.dumps(failed))
-        mf_path.write_text(json.dumps(manifest, indent=1))
+        fail_path.write_text(json.dumps(failed), encoding="utf-8")
+        mf_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     log(f"done: {len(plan)} matched, {len(missing)} missing - list with reasons: {report}")
     return 0
 
@@ -867,7 +912,7 @@ def get_api_key(cfg: dict) -> str | None:
     if not key:
         kf = Path(cfg["api_key_file"]).expanduser()
         kf = kf if kf.is_absolute() else Path(__file__).resolve().parent / kf
-        key = kf.read_text().strip() if kf.exists() else None
+        key = kf.read_text(encoding="utf-8").strip() if kf.exists() else None
     return key
 
 
@@ -886,7 +931,7 @@ def list_consoles(cfg: dict) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ra-wtp-sync", description=__doc__.split("\n\n")[0])
-    ap.add_argument("-c", "--config", help="TOML config (default: config.toml next to the script, else ~/.config/ra-wtp-sync/config.toml)")
+    ap.add_argument("-c", "--config", help="TOML config (default: config.toml next to the script, else <user config dir>/ra-wtp-sync/config.toml)")
     ap.add_argument("--username", help="RetroAchievements user name")
     ap.add_argument("--api-key-file", dest="api_key_file", help="file holding the RA Web API key (or set $RA_API_KEY)")
     ap.add_argument("--src", help="ROM library (read-only)")
@@ -904,6 +949,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
     cfg = load_config(args)
     if args.list_consoles:

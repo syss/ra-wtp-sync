@@ -209,5 +209,38 @@ class Report(unittest.TestCase):
             self.assertIn("retroachievements.org/game/42", txt)
 
 
+class Portability(unittest.TestCase):
+    def test_lock_is_exclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            a, b = m.FileLock(Path(d, "lock")), m.FileLock(Path(d, "lock"))
+            self.assertTrue(a.acquire())
+            self.assertFalse(b.acquire())
+
+    def test_default_dirs_are_absolute_and_per_user(self):
+        for p in (m.CONFIG_DIR, m.STATE_DIR):
+            self.assertTrue(p.is_absolute())
+            self.assertEqual(p.name == "ra-wtp-sync" or p.parent.name == "ra-wtp-sync", True)
+        self.assertTrue(os.path.isabs(m.DEFAULTS["state_dir"]))
+
+    def test_log_timestamp_format_is_portable(self):
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            m.log("hello \u00e9")
+        self.assertRegex(buf.getvalue(), r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d hello")
+
+    def test_nfd_and_nfc_names_match_for_saves(self):
+        import unicodedata
+        nfd = unicodedata.normalize("NFD", "Pok\u00e9mon - Crystal")
+        nfc = unicodedata.normalize("NFC", "Pok\u00e9mon - Crystal")
+        self.assertEqual(m.stem(nfd + ".srm"), m.stem(nfc + ".gbc"))
+
+    def test_utf8_roundtrip_of_state_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "missing.txt")
+            m.write_report(p, "u", [(1, "Pok\u00e9mon \u30c6\u30b9\u30c8", "Game Boy", "x")], 0)
+            self.assertIn("\u30c6\u30b9\u30c8", p.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

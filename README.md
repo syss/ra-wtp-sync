@@ -27,54 +27,79 @@ handhelds and PCs always carry exactly the games you want to play, with RA-compa
   provided, with the reason and a link.
 * Standard library only, Python 3.11+. No ROMs are downloaded or distributed - you bring your own.
 
+## Requirements
+
+Python 3.11 or newer on **Linux, macOS or Windows** (tested on all three by CI). Nothing else to
+install. Below, `python` means `python3` on Linux/macOS and `py` (or `python`) on Windows.
+
 ## Quick start
 
-Easiest: run the guided setup (asks a few questions, you paste your API key when asked):
+Easiest: run the guided setup. It asks a few questions (you paste your API key when asked), writes
+the git-ignored `config.toml`, runs a dry run, and can schedule the sync with your OS's scheduler.
 
-```bash
-git clone <this repo> && cd ra-wtp-sync
-./setup.sh
+```
+git clone <this repo>
+cd ra-wtp-sync
+python setup.py
 ```
 
-Prefer clicking? `./ra_wtp_gui.py` opens a small settings page in your browser (local only):
-pick consoles, folders and preferences, then save and start a dry run or a real run.
+Prefer clicking? `python ra_wtp_gui.py` opens a small settings page in your browser (served on
+127.0.0.1 only): pick consoles, folders and preferences, then save and start a dry run or a real run.
 
 Manual setup:
 
-```bash
-git clone <this repo> && cd ra-wtp-sync
-cp examples/config.example.toml config.toml          # git-ignored: your settings stay local
-$EDITOR config.toml                                  # username, src, dest, ...
-
-# API key from https://retroachievements.org/settings (Keys). Stored with mode 600:
-umask 077 && read -rsp "RA API key: " k && printf %s "$k" > api_key     # git-ignored too
-# (default api_key_file is ~/.config/ra-wtp-sync/api_key; a relative path is resolved next to the script)
-
-./ra_wtp_sync.py --dry-run   # see what would happen
-./ra_wtp_sync.py             # do it
 ```
+cp examples/config.example.toml config.toml     # Windows: copy examples\config.example.toml config.toml
+# edit config.toml: username, src, dest, ...
+python ra_wtp_sync.py --dry-run                  # see what would happen
+python ra_wtp_sync.py                            # do it
+```
+
+API key: get it at https://retroachievements.org/settings (Keys) and either `export RA_API_KEY=...`
+(Windows: `set RA_API_KEY=...`) or save it, and nothing else, in a file named by `api_key_file`
+(default: `api_key` in your user config folder, see below; a relative path is resolved next to the
+script). `setup.py` and the GUI do this for you and restrict the file to your user.
 
 The first run hashes your library (cached afterwards, keyed by size and mtime), so it can take a
 few minutes for a big collection; later runs only look at new files.
-Games on your list that are not in your library are written to `not-in-library.txt` in the
-state directory.
+
+### Where things live
+
+| | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| config (after `config.toml` next to the script) | `~/.config/ra-wtp-sync/` | `~/Library/Application Support/ra-wtp-sync/` | `%APPDATA%\ra-wtp-sync\` |
+| cache, manifest, report | `~/.local/state/ra-wtp-sync/` | `~/Library/Application Support/ra-wtp-sync/state/` | `%LOCALAPPDATA%\ra-wtp-sync\` |
+
+(`XDG_CONFIG_HOME` / `XDG_STATE_HOME` are honoured on Linux; override any of it with `state_dir`,
+`api_key_file`, `--config`.)
 
 ### Run it regularly
 
-systemd (user):
+`python setup.py` offers to do this for you. By hand:
 
-```bash
-install -Dm644 examples/ra-wtp-sync.service ~/.config/systemd/user/ra-wtp-sync.service
-install -Dm644 examples/ra-wtp-sync.timer   ~/.config/systemd/user/ra-wtp-sync.timer
-systemctl --user enable --now ra-wtp-sync.timer
-```
+* **Linux** - cron: `7,37 * * * * python3 /path/to/ra-wtp-sync/ra_wtp_sync.py`, or the systemd user
+  timer in `examples/` (`ra-wtp-sync.service` + `ra-wtp-sync.timer`, copy to `~/.config/systemd/user/`,
+  then `systemctl --user enable --now ra-wtp-sync.timer`).
+* **macOS** - a LaunchAgent (`setup.py` writes `~/Library/LaunchAgents/ra-wtp-sync.plist` and loads it).
+* **Windows** - Task Scheduler:
+  `schtasks /Create /TN ra-wtp-sync /SC MINUTE /MO 30 /TR "pythonw C:\path\to\ra_wtp_sync.py"`.
 
-or cron: `*/30 * * * * /usr/bin/python3 /path/to/ra-wtp-sync/ra_wtp_sync.py >> ~/.local/state/ra-wtp-sync/log 2>&1`
+Overlapping runs are prevented by a lock, so a slow first run never collides with the next one.
+
+### Platform notes
+
+* **macOS:** if you get a TLS certificate error with a python.org Python, run *Install
+  Certificates.command* from the Python folder in Applications (or `pip install certifi`).
+  File names are compared Unicode-normalised, so accented names match on macOS volumes.
+* **Windows:** enable long paths if your library has very deep folders. File names that are not
+  valid on Windows (for example containing `:`) cannot exist in the library there; patched ROMs
+  are named safely. The sync folder is plain files, so Syncthing, OneDrive & co. all work.
+* **All:** source and output must be different folders; the library is only opened for reading.
 
 ## Configuration
 
 Settings come from (highest first) command line, `$RA_USER` / `$RA_API_KEY`, the config file
-(`--config`, `$RA_WTP_CONFIG`, a `config.toml` next to the script - git-ignored - or `~/.config/ra-wtp-sync/config.toml`), then defaults.
+(`--config`, `$RA_WTP_CONFIG`, a `config.toml` next to the script - git-ignored - or one in your user config folder), then defaults.
 `examples/config.example.toml` documents every option:
 
 | option | meaning |
@@ -95,7 +120,7 @@ Settings come from (highest first) command line, `$RA_USER` / `$RA_API_KEY`, the
 
 ### Consoles
 
-`./ra_wtp_sync.py --list-consoles` shows every console RetroAchievements supports (about 55),
+`python ra_wtp_sync.py --list-consoles` shows every console RetroAchievements supports (about 55),
 which ones are selected, and how each is matched:
 
 * **hash** - cartridge based systems: the file's content hash must equal one RA registered, so only
@@ -114,7 +139,7 @@ map yours with `console_overrides`.
 
 ### Missing ROMs and patches
 
-Each run writes `missing-roms.txt` (in the state directory, or `report_file`) listing every wanted
+Each run writes `missing-roms.txt` (in the state folder, or `report_file`) listing every wanted
 game that was not provided and why: not in the library; an official patch exists but its base ROM
 is missing (the file says which dump it needs); patch format unsupported (7z, xdelta, ppf); or no
 patch is published. Built ROMs are verified against RA's hash before they are used.

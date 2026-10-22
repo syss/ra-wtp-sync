@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 ra-wtp-sync contributors
 
-# Copy to ~/.config/ra-wtp-sync/config.toml and adjust.
+# Copy to config.toml next to ra_wtp_sync.py (git-ignored) - or into your user config folder
+# (see README) - and adjust. Paths work with / on every OS; on Windows both C:/roms and C:\\roms
+# (doubled backslashes inside quotes) are fine.
 # Every key can also be given on the command line (see `ra-wtp-sync --help`).
 
 username = "YourRAUsername"
 
 # Your RetroAchievements Web API key: https://retroachievements.org/settings -> Keys
 # Either export RA_API_KEY, or put the key (only the key) in this file (chmod 600).
-api_key_file = "~/.config/ra-wtp-sync/api_key"   # relative paths are relative to the working directory
+# Default: "api_key" in your user config folder. A relative path is resolved next to the script.
+# api_key_file = "api_key"
 
 # Your ROM library. Opened read-only; nothing is ever written, moved or deleted here.
 src = "/path/to/roms"
@@ -18,7 +21,7 @@ src = "/path/to/roms"
 dest = "/path/to/synced-folder/roms-wtp"
 
 # Where the hash cache and the manifest live (not synced).
-state_dir = "~/.local/state/ra-wtp-sync"
+# state_dir = "/path/to/state"   # default: per-user state folder (see README)
 
 # Folders with existing save files (RetroArch "saves" dir, searched recursively).
 # If several ROMs would work, the one that already has a save is chosen first.
@@ -28,7 +31,7 @@ saves = []
 include_started = false
 
 # Systems to handle: keys, RetroAchievements console ids, or ["all"]. List them with
-#   ./ra_wtp_sync.py --list-consoles
+#   python ra_wtp_sync.py --list-consoles
 # Cartridge systems are matched by RA hash. Disc based and other systems (psx, ps2, gamecube,
 # wii, nds, 3ds, saturn, dreamcast, psp, arcade, ...) are matched by game title instead, and
 # their files can be very large - select them deliberately.
